@@ -24,7 +24,7 @@ export default function App() {
   formData.append("question_type", "general_question"); // or "summary", "chronology" as needed
 
   try {
-    const BACKEND_URL = process.env.REACT_APP_BACKEND_URL
+    const BACKEND_URL = import.meta.env.VITE_BACKEND_URL
     const res = await fetch(`${BACKEND_URL}/ask`, {
       method: "POST",
       body: formData,
