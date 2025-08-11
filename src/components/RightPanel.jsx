@@ -1,125 +1,184 @@
-import React, { useEffect, forwardRef, useImperativeHandle, useRef } from "react";
 import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf";
-import "pdfjs-dist/web/pdf_viewer.css";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc =
   "https://unpkg.com/pdfjs-dist@3.11.174/build/pdf.worker.min.js";
 
-const RightPanel = forwardRef(({ pdfFile, citations }, ref) => {
-  const containerRef = useRef();
-  const pageWrappers = useRef({}); // pageNum -> wrapper div
-
-  // Match colors from LeftPanel
-  const colors = [
-    "rgba(253, 224, 71, 0.4)",  // yellow-300
-    "rgba(134, 239, 172, 0.4)", // green-300
-    "rgba(147, 197, 253, 0.4)", // blue-300
-    "rgba(216, 180, 254, 0.4)", // purple-300
-    "rgba(249, 168, 212, 0.4)", // pink-300
-    "rgba(253, 186, 116, 0.4)", // orange-300
-  ];
-  const getColorForPage = (page) => colors[(page - 1) % colors.length];
-
-  useImperativeHandle(ref, () => ({
-    scrollToCitation(citation) {
-      if (!citation) return;
-      const pageElement = pageWrappers.current[citation.page];
-      if (pageElement) {
-        pageElement.scrollIntoView({ behavior: "smooth" });
-        drawHighlights(citation.page, [citation]);
+// Extract text from entire PDF
+export async function extractTextFromPDF(pdfFile) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    
+    reader.onload = async function() {
+      try {
+        const arrayBuffer = this.result;
+        const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(arrayBuffer) }).promise;
+        
+        let fullText = '';
+        const pages = [];
+        
+        for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+          const page = await pdf.getPage(pageNum);
+          const textContent = await page.getTextContent();
+          
+          // Extract text items and join them
+          const pageText = textContent.items
+            .map(item => item.str)
+            .join(' ')
+            .replace(/\s+/g, ' ') // Clean up extra whitespace
+            .trim();
+          
+          pages.push({
+            pageNumber: pageNum,
+            text: pageText
+          });
+          
+          fullText += pageText + '\n\n';
+        }
+        
+        resolve({
+          fullText: fullText.trim(),
+          pages: pages,
+          totalPages: pdf.numPages
+        });
+        
+      } catch (error) {
+        reject(error);
       }
-    },
-  }));
-
-  // Draw highlight overlays
- const SCALE = 1.2;
-
-function drawHighlights(pageNum, citationList) {
-  const wrapper = pageWrappers.current[pageNum];
-  if (!wrapper) return;
-
-  // Remove old highlights
-  wrapper.querySelectorAll(".citation-highlight").forEach((el) => el.remove());
-
-  const viewportHeight = parseFloat(wrapper.style.height);
-
-  citationList.forEach((cit) => {
-    const color = cit.color || getColorForPage(cit.page);
-    (cit.rects || []).forEach((r) => {
-      const overlay = document.createElement("div");
-      overlay.className = "citation-highlight";
-      overlay.style.position = "absolute";
-      overlay.style.left = `${r.x * SCALE}px`;
-      overlay.style.top = `${(viewportHeight - r.y - r.height) * SCALE}px`;
-      overlay.style.width = `${r.width * SCALE}px`;
-      overlay.style.height = `${r.height * SCALE}px`;
-      overlay.style.backgroundColor = color;
-      overlay.style.pointerEvents = "none";
-      overlay.style.zIndex = "10";
-      wrapper.appendChild(overlay);
-    });
+    };
+    
+    reader.onerror = () => reject(new Error('Failed to read PDF file'));
+    reader.readAsArrayBuffer(pdfFile);
   });
 }
 
-
-
-  // Render PDF
-  useEffect(() => {
-    if (!pdfFile) {
-      containerRef.current.innerHTML = "<div class='p-6'>No PDF loaded</div>";
-      return;
-    }
-
+// Extract text from specific page
+export async function extractTextFromPage(pdfFile, pageNumber) {
+  return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onload = async function () {
-      const arrayBuffer = this.result;
-      const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(arrayBuffer) }).promise;
-
-      containerRef.current.innerHTML = "";
-      pageWrappers.current = {};
-
-      for (let p = 1; p <= pdf.numPages; p++) {
-        const page = await pdf.getPage(p);
-        const viewport = page.getViewport({ scale: 1.2 });
-
-        const canvas = document.createElement("canvas");
-        const ctx = canvas.getContext("2d");
-        canvas.width = viewport.width;
-        canvas.height = viewport.height;
-
-        const wrapper = document.createElement("div");
-        wrapper.setAttribute("data-page-number", p);
-        wrapper.style.position = "relative";
-        wrapper.style.width = `${viewport.width}px`;
-        wrapper.style.height = `${viewport.height}px`;
-        wrapper.className = "mb-4";
-
-        wrapper.appendChild(canvas);
-        containerRef.current.appendChild(wrapper);
-
-        pageWrappers.current[p] = wrapper;
-
-        await page.render({ canvasContext: ctx, viewport }).promise;
+    
+    reader.onload = async function() {
+      try {
+        const arrayBuffer = this.result;
+        const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(arrayBuffer) }).promise;
+        
+        if (pageNumber > pdf.numPages || pageNumber < 1) {
+          throw new Error(`Page ${pageNumber} does not exist. PDF has ${pdf.numPages} pages.`);
+        }
+        
+        const page = await pdf.getPage(pageNumber);
+        const textContent = await page.getTextContent();
+        
+        const pageText = textContent.items
+          .map(item => item.str)
+          .join(' ')
+          .replace(/\s+/g, ' ')
+          .trim();
+        
+        resolve({
+          pageNumber: pageNumber,
+          text: pageText,
+          totalPages: pdf.numPages
+        });
+        
+      } catch (error) {
+        reject(error);
       }
-
-      // Draw all highlights after rendering
-      const grouped = citations.reduce((acc, cit) => {
-        acc[cit.page] = acc[cit.page] || [];
-        acc[cit.page].push(cit);
-        return acc;
-      }, {});
-      Object.keys(grouped).forEach((page) => {
-        drawHighlights(parseInt(page), grouped[page]);
-      });
     };
+    
+    reader.onerror = () => reject(new Error('Failed to read PDF file'));
     reader.readAsArrayBuffer(pdfFile);
-  }, [pdfFile, citations]);
+  });
+}
 
-  return (
-    <div className="flex-1 overflow-y-auto p-4" ref={containerRef}>
-      <h2 className="text-lg font-semibold mb-3">Document Viewer</h2>
-    </div>
-  );
-});
+// Extract text with position information (useful for highlighting)
+export async function extractTextWithPositions(pdfFile, pageNumber) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    
+    reader.onload = async function() {
+      try {
+        const arrayBuffer = this.result;
+        const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(arrayBuffer) }).promise;
+        
+        const page = await pdf.getPage(pageNumber);
+        const textContent = await page.getTextContent();
+        const viewport = page.getViewport({ scale: 1.0 });
+        
+        const textItems = textContent.items.map(item => ({
+          text: item.str,
+          x: item.transform[4],
+          y: viewport.height - item.transform[5], // Convert to top-left origin
+          width: item.width,
+          height: item.height,
+          fontName: item.fontName,
+          fontSize: Math.round(item.transform[0])
+        }));
+        
+        resolve({
+          pageNumber: pageNumber,
+          textItems: textItems,
+          fullText: textItems.map(item => item.text).join(' ').replace(/\s+/g, ' ').trim()
+        });
+        
+      } catch (error) {
+        reject(error);
+      }
+    };
+    
+    reader.onerror = () => reject(new Error('Failed to read PDF file'));
+    reader.readAsArrayBuffer(pdfFile);
+  });
+}
 
-export default RightPanel;
+// Usage examples:
+
+// Example 1: Extract all text
+async function handleFileUpload(file) {
+  try {
+    const result = await extractTextFromPDF(file);
+    console.log('Full text:', result.fullText);
+    console.log('Pages:', result.pages);
+  } catch (error) {
+    console.error('Error extracting text:', error);
+  }
+}
+
+// Example 2: Extract from specific page
+async function getPageText(file, pageNum) {
+  try {
+    const result = await extractTextFromPage(file, pageNum);
+    console.log(`Page ${pageNum} text:`, result.text);
+  } catch (error) {
+    console.error('Error:', error);
+  }
+}
+
+// Example 3: Search for text in PDF
+export async function searchTextInPDF(pdfFile, searchTerm) {
+  try {
+    const result = await extractTextFromPDF(pdfFile);
+    const matches = [];
+    
+    result.pages.forEach(page => {
+      const regex = new RegExp(searchTerm, 'gi');
+      let match;
+      
+      while ((match = regex.exec(page.text)) !== null) {
+        matches.push({
+          pageNumber: page.pageNumber,
+          text: match[0],
+          index: match.index,
+          context: page.text.substring(
+            Math.max(0, match.index - 50),
+            Math.min(page.text.length, match.index + match[0].length + 50)
+          )
+        });
+      }
+    });
+    
+    return matches;
+  } catch (error) {
+    console.error('Search error:', error);
+    return [];
+  }
+}
