@@ -41,7 +41,6 @@ function drawHighlights(pageNum, citationList) {
   // Remove old highlights
   wrapper.querySelectorAll(".citation-highlight").forEach((el) => el.remove());
 
-  // Get the viewport height from the wrapper style (assuming wrapper height matches viewport height)
   const viewportHeight = parseFloat(wrapper.style.height);
 
   citationList.forEach((cit) => {
@@ -51,7 +50,6 @@ function drawHighlights(pageNum, citationList) {
       overlay.className = "citation-highlight";
       overlay.style.position = "absolute";
       overlay.style.left = `${r.x * SCALE}px`;
-      // Flip Y axis for PDF -> HTML coordinate system
       overlay.style.top = `${(viewportHeight - r.y - r.height) * SCALE}px`;
       overlay.style.width = `${r.width * SCALE}px`;
       overlay.style.height = `${r.height * SCALE}px`;
@@ -62,6 +60,7 @@ function drawHighlights(pageNum, citationList) {
     });
   });
 }
+
 
 
   // Render PDF
