@@ -25,7 +25,7 @@ export default function App() {
 
   try {
     const BACKEND_URL = import.meta.env.VITE_BACKEND_URL
-    const res = await fetch(`${BACKEND_URL}/ask`, {
+    const res = await fetch('http://localhost:8000/ask', {
       method: "POST",
       body: formData,
     });
