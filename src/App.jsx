@@ -24,7 +24,7 @@ export default function App() {
   formData.append("question_type", "general_question"); // or "summary", "chronology" as needed
 
   try {
-    const BACKEND_URL = process.env.REACT_APP_BACKEND_URL
+    const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || "http://localhost:8000";
     const res = await fetch(`${BACKEND_URL}/ask`, {
       method: "POST",
       body: formData,
@@ -44,6 +44,9 @@ export default function App() {
       viewerRef.current.scrollToCitation(citation);
     }
   };
+  const handleUpload = (file) => {
+    setPdfFile(file);
+  };
 
   return (
     <div className="h-screen flex bg-gray-100">
@@ -58,6 +61,7 @@ export default function App() {
         setMessage={setMessage}
         onSend={handleSend}
         onCitationClick={handleCitationClick}
+        onUpload={handleUpload} 
       />
     </div>
   );
