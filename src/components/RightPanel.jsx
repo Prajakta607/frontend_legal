@@ -1,184 +1,344 @@
+import React, { useState, useEffect, useRef, forwardRef, useImperativeHandle } from "react";
 import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf";
+import { ChevronLeftIcon, ChevronRightIcon, MagnifyingGlassMinusIcon, MagnifyingGlassPlusIcon } from "@heroicons/react/24/outline";
 
+// Set up PDF.js worker
 pdfjsLib.GlobalWorkerOptions.workerSrc =
   "https://unpkg.com/pdfjs-dist@3.11.174/build/pdf.worker.min.js";
 
-// Extract text from entire PDF
-export async function extractTextFromPDF(pdfFile) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    
-    reader.onload = async function() {
-      try {
-        const arrayBuffer = this.result;
-        const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(arrayBuffer) }).promise;
-        
-        let fullText = '';
-        const pages = [];
-        
-        for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
-          const page = await pdf.getPage(pageNum);
-          const textContent = await page.getTextContent();
-          
-          // Extract text items and join them
-          const pageText = textContent.items
-            .map(item => item.str)
-            .join(' ')
-            .replace(/\s+/g, ' ') // Clean up extra whitespace
-            .trim();
-          
-          pages.push({
-            pageNumber: pageNum,
-            text: pageText
-          });
-          
-          fullText += pageText + '\n\n';
-        }
-        
-        resolve({
-          fullText: fullText.trim(),
-          pages: pages,
-          totalPages: pdf.numPages
-        });
-        
-      } catch (error) {
-        reject(error);
-      }
-    };
-    
-    reader.onerror = () => reject(new Error('Failed to read PDF file'));
-    reader.readAsArrayBuffer(pdfFile);
-  });
-}
+const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata, docId }, ref) {
+  const [pdf, setPdf] = useState(null);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(0);
+  const [scale, setScale] = useState(1.0);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [textLayer, setTextLayer] = useState(null);
+  const [highlightedCitation, setHighlightedCitation] = useState(null);
 
-// Extract text from specific page
-export async function extractTextFromPage(pdfFile, pageNumber) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    
-    reader.onload = async function() {
-      try {
-        const arrayBuffer = this.result;
-        const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(arrayBuffer) }).promise;
-        
-        if (pageNumber > pdf.numPages || pageNumber < 1) {
-          throw new Error(`Page ${pageNumber} does not exist. PDF has ${pdf.numPages} pages.`);
-        }
-        
-        const page = await pdf.getPage(pageNumber);
-        const textContent = await page.getTextContent();
-        
-        const pageText = textContent.items
-          .map(item => item.str)
-          .join(' ')
-          .replace(/\s+/g, ' ')
-          .trim();
-        
-        resolve({
-          pageNumber: pageNumber,
-          text: pageText,
-          totalPages: pdf.numPages
-        });
-        
-      } catch (error) {
-        reject(error);
-      }
-    };
-    
-    reader.onerror = () => reject(new Error('Failed to read PDF file'));
-    reader.readAsArrayBuffer(pdfFile);
-  });
-}
+  const canvasRef = useRef();
+  const containerRef = useRef();
+  const textLayerRef = useRef();
 
-// Extract text with position information (useful for highlighting)
-export async function extractTextWithPositions(pdfFile, pageNumber) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
+  // Load PDF when file changes
+  useEffect(() => {
+    if (pdfFile) {
+      loadPDF(pdfFile);
+    } else {
+      setPdf(null);
+      setCurrentPage(1);
+      setTotalPages(0);
+      setError(null);
+    }
+  }, [pdfFile]);
+
+  // Render page when PDF, currentPage, or scale changes
+  useEffect(() => {
+    if (pdf) {
+      renderPage(currentPage);
+    }
+  }, [pdf, currentPage, scale]);
+
+  // Clear highlights when citations change
+  useEffect(() => {
+    if (textLayerRef.current) {
+      clearHighlights();
+    }
+  }, [citedPagesMetadata]);
+
+  const loadPDF = async (file) => {
+    setLoading(true);
+    setError(null);
     
-    reader.onload = async function() {
-      try {
-        const arrayBuffer = this.result;
-        const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(arrayBuffer) }).promise;
-        
-        const page = await pdf.getPage(pageNumber);
-        const textContent = await page.getTextContent();
-        const viewport = page.getViewport({ scale: 1.0 });
-        
-        const textItems = textContent.items.map(item => ({
-          text: item.str,
-          x: item.transform[4],
-          y: viewport.height - item.transform[5], // Convert to top-left origin
-          width: item.width,
-          height: item.height,
-          fontName: item.fontName,
-          fontSize: Math.round(item.transform[0])
-        }));
-        
-        resolve({
-          pageNumber: pageNumber,
-          textItems: textItems,
-          fullText: textItems.map(item => item.text).join(' ').replace(/\s+/g, ' ').trim()
-        });
-        
-      } catch (error) {
-        reject(error);
-      }
-    };
-    
-    reader.onerror = () => reject(new Error('Failed to read PDF file'));
-    reader.readAsArrayBuffer(pdfFile);
-  });
-}
+    try {
+      const arrayBuffer = await file.arrayBuffer();
+      const pdfDoc = await pdfjsLib.getDocument({ data: new Uint8Array(arrayBuffer) }).promise;
+      setPdf(pdfDoc);
+      setTotalPages(pdfDoc.numPages);
+      setCurrentPage(1);
+    } catch (err) {
+      console.error("Error loading PDF:", err);
+      setError("Failed to load PDF file");
+    } finally {
+      setLoading(false);
+    }
+  };
 
-// Usage examples:
+  const renderPage = async (pageNum) => {
+    if (!pdf || !canvasRef.current) return;
 
-// Example 1: Extract all text
-async function handleFileUpload(file) {
-  try {
-    const result = await extractTextFromPDF(file);
-    console.log('Full text:', result.fullText);
-    console.log('Pages:', result.pages);
-  } catch (error) {
-    console.error('Error extracting text:', error);
-  }
-}
+    setLoading(true);
+    try {
+      const page = await pdf.getPage(pageNum);
+      const viewport = page.getViewport({ scale });
 
-// Example 2: Extract from specific page
-async function getPageText(file, pageNum) {
-  try {
-    const result = await extractTextFromPage(file, pageNum);
-    console.log(`Page ${pageNum} text:`, result.text);
-  } catch (error) {
-    console.error('Error:', error);
-  }
-}
+      const canvas = canvasRef.current;
+      const context = canvas.getContext("2d");
+      canvas.height = viewport.height;
+      canvas.width = viewport.width;
 
-// Example 3: Search for text in PDF
-export async function searchTextInPDF(pdfFile, searchTerm) {
-  try {
-    const result = await extractTextFromPDF(pdfFile);
-    const matches = [];
-    
-    result.pages.forEach(page => {
-      const regex = new RegExp(searchTerm, 'gi');
-      let match;
+      // Render PDF page
+      const renderContext = {
+        canvasContext: context,
+        viewport: viewport,
+      };
+      await page.render(renderContext).promise;
+
+      // Render text layer for text selection and highlighting
+      await renderTextLayer(page, viewport);
       
-      while ((match = regex.exec(page.text)) !== null) {
-        matches.push({
-          pageNumber: page.pageNumber,
-          text: match[0],
-          index: match.index,
-          context: page.text.substring(
-            Math.max(0, match.index - 50),
-            Math.min(page.text.length, match.index + match[0].length + 50)
-          )
+      // Apply highlights for current page
+      highlightCurrentPageCitations();
+      
+    } catch (err) {
+      console.error("Error rendering page:", err);
+      setError("Failed to render page");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const renderTextLayer = async (page, viewport) => {
+    if (!textLayerRef.current) return;
+
+    // Clear existing text layer
+    textLayerRef.current.innerHTML = "";
+    textLayerRef.current.style.width = viewport.width + "px";
+    textLayerRef.current.style.height = viewport.height + "px";
+
+    try {
+      const textContent = await page.getTextContent();
+      setTextLayer(textContent);
+
+      // Render text items
+      textContent.items.forEach((textItem, index) => {
+        const textDiv = document.createElement("div");
+        textDiv.textContent = textItem.str;
+        textDiv.style.position = "absolute";
+        
+        // Transform coordinates
+        const transform = textItem.transform;
+        const x = transform[4];
+        const y = viewport.height - transform[5];
+        
+        textDiv.style.left = x + "px";
+        textDiv.style.top = (y - textItem.height) + "px";
+        textDiv.style.fontSize = (textItem.height * scale) + "px";
+        textDiv.style.fontFamily = textItem.fontName || "sans-serif";
+        textDiv.style.color = "transparent";
+        textDiv.style.userSelect = "text";
+        textDiv.dataset.textIndex = index;
+        
+        textLayerRef.current.appendChild(textDiv);
+      });
+    } catch (err) {
+      console.error("Error rendering text layer:", err);
+    }
+  };
+
+  const clearHighlights = () => {
+    if (textLayerRef.current) {
+      const highlightedElements = textLayerRef.current.querySelectorAll(".citation-highlight");
+      highlightedElements.forEach(el => {
+        el.classList.remove("citation-highlight");
+        el.style.backgroundColor = "";
+      });
+    }
+  };
+
+  const highlightCurrentPageCitations = () => {
+    if (!textLayer || !textLayerRef.current) return;
+
+    // Get citations for current page
+    const currentPageCitations = citedPagesMetadata.filter(citation => citation.page === currentPage);
+    
+    currentPageCitations.forEach(citation => {
+      highlightTextInLayer(citation);
+    });
+  };
+
+  const highlightTextInLayer = (citation) => {
+    if (!textLayer || !textLayerRef.current) return;
+
+    const searchText = citation.quote || citation.content_preview;
+    if (!searchText) return;
+
+    // Simple text highlighting - find matching text in the text layer
+    const textItems = textLayerRef.current.querySelectorAll("div");
+    const fullPageText = Array.from(textItems).map(el => el.textContent).join(" ");
+    
+    // Find the citation text in the page
+    const searchIndex = fullPageText.toLowerCase().indexOf(searchText.toLowerCase());
+    if (searchIndex === -1) return;
+
+    // Highlight matching text divs
+    let charCount = 0;
+    textItems.forEach(textDiv => {
+      const textLength = textDiv.textContent.length;
+      const textStart = charCount;
+      const textEnd = charCount + textLength;
+
+      // Check if this text div overlaps with our search text
+      if (textStart <= searchIndex + searchText.length && textEnd >= searchIndex) {
+        textDiv.classList.add("citation-highlight");
+        textDiv.style.backgroundColor = "yellow";
+        textDiv.style.opacity = "0.7";
+      }
+
+      charCount = textEnd + 1; // +1 for space between text items
+    });
+  };
+
+  const scrollToCitation = (citation) => {
+    // Navigate to the page of the citation
+    if (citation.page !== currentPage) {
+      setCurrentPage(citation.page);
+    }
+    
+    // Set this citation as highlighted
+    setHighlightedCitation(citation);
+    
+    // Scroll citation into view after a short delay to ensure page is rendered
+    setTimeout(() => {
+      if (containerRef.current) {
+        containerRef.current.scrollIntoView({ 
+          behavior: "smooth", 
+          block: "center" 
         });
       }
-    });
-    
-    return matches;
-  } catch (error) {
-    console.error('Search error:', error);
-    return [];
+    }, 100);
+  };
+
+  // Expose methods to parent component
+  useImperativeHandle(ref, () => ({
+    scrollToCitation,
+  }));
+
+  const handlePrevPage = () => {
+    if (currentPage > 1) {
+      setCurrentPage(currentPage - 1);
+    }
+  };
+
+  const handleNextPage = () => {
+    if (currentPage < totalPages) {
+      setCurrentPage(currentPage + 1);
+    }
+  };
+
+  const handleZoomIn = () => {
+    setScale(Math.min(scale + 0.2, 3.0));
+  };
+
+  const handleZoomOut = () => {
+    setScale(Math.max(scale - 0.2, 0.5));
+  };
+
+  if (!pdfFile) {
+    return (
+      <div className="w-[65%] flex items-center justify-center bg-gray-50">
+        <div className="text-center text-gray-500">
+          <div className="text-lg mb-2">No PDF loaded</div>
+          <div className="text-sm">Upload a PDF file to get started</div>
+        </div>
+      </div>
+    );
   }
-}
+
+  return (
+    <div className="w-[65%] flex flex-col bg-gray-50">
+      {/* Toolbar */}
+      <div className="bg-white border-b p-3 flex items-center justify-between">
+        <div className="flex items-center space-x-2">
+          <button
+            onClick={handlePrevPage}
+            disabled={currentPage <= 1 || loading}
+            className="p-1 rounded hover:bg-gray-200 disabled:opacity-50"
+          >
+            <ChevronLeftIcon className="w-5 h-5" />
+          </button>
+          
+          <span className="text-sm text-gray-600">
+            {loading ? "Loading..." : `Page ${currentPage} of ${totalPages}`}
+          </span>
+          
+          <button
+            onClick={handleNextPage}
+            disabled={currentPage >= totalPages || loading}
+            className="p-1 rounded hover:bg-gray-200 disabled:opacity-50"
+          >
+            <ChevronRightIcon className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="flex items-center space-x-2">
+          <button
+            onClick={handleZoomOut}
+            disabled={scale <= 0.5}
+            className="p-1 rounded hover:bg-gray-200 disabled:opacity-50"
+          >
+            <MagnifyingGlassMinusIcon className="w-5 h-5" />
+          </button>
+          
+          <span className="text-sm text-gray-600 min-w-[60px] text-center">
+            {Math.round(scale * 100)}%
+          </span>
+          
+          <button
+            onClick={handleZoomIn}
+            disabled={scale >= 3.0}
+            className="p-1 rounded hover:bg-gray-200 disabled:opacity-50"
+          >
+            <MagnifyingGlassPlusIcon className="w-5 h-5" />
+          </button>
+        </div>
+      </div>
+
+      {/* PDF Viewer */}
+      <div className="flex-1 overflow-auto p-4">
+        {error ? (
+          <div className="flex items-center justify-center h-full text-red-500">
+            <div className="text-center">
+              <div className="text-lg mb-2">Error loading PDF</div>
+              <div className="text-sm">{error}</div>
+            </div>
+          </div>
+        ) : (
+          <div ref={containerRef} className="flex justify-center">
+            <div className="relative shadow-lg">
+              <canvas ref={canvasRef} className="block" />
+              {/* Text layer for selection and highlighting */}
+              <div
+                ref={textLayerRef}
+                className="absolute top-0 left-0 pointer-events-none"
+                style={{ 
+                  fontSize: "1px",
+                  lineHeight: 1,
+                }}
+              />
+              {/* Loading overlay */}
+              {loading && (
+                <div className="absolute inset-0 bg-white bg-opacity-75 flex items-center justify-center">
+                  <div className="flex items-center space-x-2">
+                    <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600"></div>
+                    <span>Loading...</span>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Add CSS for highlights */}
+      <style jsx>{`
+        .citation-highlight {
+          background-color: yellow !important;
+          opacity: 0.7 !important;
+        }
+      `}</style>
+    </div>
+  );
+});
+
+export default RightPanel;
