@@ -127,6 +127,7 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
         textDiv.style.fontFamily = textItem.fontName || "sans-serif";
         textDiv.style.color = "transparent";
         textDiv.style.userSelect = "text";
+        textDiv.style.pointerEvents = "auto";
         textDiv.dataset.textIndex = index;
         
         textLayerRef.current.appendChild(textDiv);
@@ -142,6 +143,12 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
       highlightedElements.forEach(el => {
         el.classList.remove("citation-highlight");
         el.style.backgroundColor = "";
+        el.style.color = "transparent";
+        el.style.opacity = "";
+        el.style.padding = "";
+        el.style.borderRadius = "";
+        el.style.zIndex = "";
+        el.style.position = "";
       });
     }
   };
@@ -163,29 +170,68 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
     const searchText = citation.quote || citation.content_preview;
     if (!searchText) return;
 
-    // Simple text highlighting - find matching text in the text layer
+    // Clean up the search text for better matching
+    const cleanSearchText = searchText.replace(/\s+/g, ' ').trim().toLowerCase();
+    
     const textItems = textLayerRef.current.querySelectorAll("div");
     const fullPageText = Array.from(textItems).map(el => el.textContent).join(" ");
+    const cleanFullText = fullPageText.replace(/\s+/g, ' ').toLowerCase();
     
     // Find the citation text in the page
-    const searchIndex = fullPageText.toLowerCase().indexOf(searchText.toLowerCase());
-    if (searchIndex === -1) return;
+    const searchIndex = cleanFullText.indexOf(cleanSearchText);
+    if (searchIndex === -1) {
+      // Try partial matching for better results
+      const words = cleanSearchText.split(' ');
+      const firstWord = words[0];
+      const partialIndex = cleanFullText.indexOf(firstWord);
+      if (partialIndex !== -1) {
+        highlightByWordMatching(citation, textItems);
+      }
+      return;
+    }
 
     // Highlight matching text divs
     let charCount = 0;
-    textItems.forEach(textDiv => {
-      const textLength = textDiv.textContent.length;
+    textItems.forEach((textDiv, index) => {
+      const textContent = textDiv.textContent.replace(/\s+/g, ' ').trim();
+      const textLength = textContent.length;
       const textStart = charCount;
       const textEnd = charCount + textLength;
 
       // Check if this text div overlaps with our search text
-      if (textStart <= searchIndex + searchText.length && textEnd >= searchIndex) {
+      if (textStart <= searchIndex + cleanSearchText.length && textEnd >= searchIndex) {
         textDiv.classList.add("citation-highlight");
-        textDiv.style.backgroundColor = "yellow";
-        textDiv.style.opacity = "0.7";
+        textDiv.style.backgroundColor = "#ffff00 !important";
+        textDiv.style.color = "#000000 !important";
+        textDiv.style.opacity = "1";
+        textDiv.style.padding = "1px 2px";
+        textDiv.style.borderRadius = "2px";
+        textDiv.style.zIndex = "10";
+        textDiv.style.position = "relative";
       }
 
       charCount = textEnd + 1; // +1 for space between text items
+    });
+  };
+
+  const highlightByWordMatching = (citation, textItems) => {
+    const searchText = (citation.quote || citation.content_preview).toLowerCase();
+    const words = searchText.split(/\s+/).filter(word => word.length > 3); // Only significant words
+    
+    textItems.forEach(textDiv => {
+      const textContent = textDiv.textContent.toLowerCase();
+      const matchedWords = words.filter(word => textContent.includes(word));
+      
+      if (matchedWords.length > 0) {
+        textDiv.classList.add("citation-highlight");
+        textDiv.style.backgroundColor = "#ffff00";
+        textDiv.style.color = "#000000";
+        textDiv.style.opacity = "0.8";
+        textDiv.style.padding = "1px 2px";
+        textDiv.style.borderRadius = "2px";
+        textDiv.style.zIndex = "10";
+        textDiv.style.position = "relative";
+      }
     });
   };
 
@@ -295,7 +341,7 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
       </div>
 
       {/* PDF Viewer */}
-      <div className="flex-1 overflow-auto p-4">
+      <div className="flex-1 overflow-auto">
         {error ? (
           <div className="flex items-center justify-center h-full text-red-500">
             <div className="text-center">
@@ -304,37 +350,51 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
             </div>
           </div>
         ) : (
-          <div ref={containerRef} className="flex justify-center">
-            <div className="relative shadow-lg">
-              <canvas ref={canvasRef} className="block" />
-              {/* Text layer for selection and highlighting */}
-              <div
-                ref={textLayerRef}
-                className="absolute top-0 left-0 pointer-events-none"
-                style={{ 
-                  fontSize: "1px",
-                  lineHeight: 1,
-                }}
-              />
-              {/* Loading overlay */}
-              {loading && (
-                <div className="absolute inset-0 bg-white bg-opacity-75 flex items-center justify-center">
-                  <div className="flex items-center space-x-2">
-                    <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600"></div>
-                    <span>Loading...</span>
+          <div className="min-h-full py-4">
+            <div ref={containerRef} className="flex justify-center">
+              <div className="relative shadow-lg mb-4">
+                <canvas ref={canvasRef} className="block" />
+                {/* Text layer for selection and highlighting */}
+                <div
+                  ref={textLayerRef}
+                  className="absolute top-0 left-0"
+                  style={{ 
+                    fontSize: "1px",
+                    lineHeight: 1,
+                    pointerEvents: "none",
+                  }}
+                />
+                {/* Loading overlay */}
+                {loading && (
+                  <div className="absolute inset-0 bg-white bg-opacity-75 flex items-center justify-center">
+                    <div className="flex items-center space-x-2">
+                      <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600"></div>
+                      <span>Loading...</span>
+                    </div>
                   </div>
-                </div>
-              )}
+                )}
+              </div>
             </div>
           </div>
         )}
       </div>
 
-      {/* Add CSS for highlights */}
+      {/* Enhanced CSS for highlights */}
       <style jsx>{`
         .citation-highlight {
-          background-color: yellow !important;
-          opacity: 0.7 !important;
+          background-color: #ffff00 !important;
+          color: #000000 !important;
+          opacity: 1 !important;
+          padding: 1px 2px !important;
+          border-radius: 2px !important;
+          z-index: 10 !important;
+          position: relative !important;
+          pointer-events: auto !important;
+        }
+        
+        .citation-highlight:hover {
+          background-color: #ffeb3b !important;
+          box-shadow: 0 1px 3px rgba(0,0,0,0.2) !important;
         }
       `}</style>
     </div>
