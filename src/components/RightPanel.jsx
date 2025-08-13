@@ -10,10 +10,10 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
   const [pdf, setPdf] = useState(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [totalPages, setTotalPages] = useState(0);
-  const [scale, setScale] = useState(1.0);
+  const [scale, setScale] = useState(1.2);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [textLayer, setTextLayer] = useState(null);
+  const [pageTextContent, setPageTextContent] = useState(null);
   const [highlightedCitation, setHighlightedCitation] = useState(null);
 
   const canvasRef = useRef();
@@ -39,12 +39,14 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
     }
   }, [pdf, currentPage, scale]);
 
-  // Clear highlights when citations change
+  // Apply highlights when citations change or page changes
   useEffect(() => {
-    if (textLayerRef.current) {
-      clearHighlights();
+    if (pageTextContent) {
+      setTimeout(() => {
+        applyHighlights();
+      }, 100);
     }
-  }, [citedPagesMetadata]);
+  }, [citedPagesMetadata, currentPage, pageTextContent]);
 
   const loadPDF = async (file) => {
     setLoading(true);
@@ -77,6 +79,9 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
       canvas.height = viewport.height;
       canvas.width = viewport.width;
 
+      // Clear previous content
+      context.clearRect(0, 0, canvas.width, canvas.height);
+
       // Render PDF page
       const renderContext = {
         canvasContext: context,
@@ -86,9 +91,6 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
 
       // Render text layer for text selection and highlighting
       await renderTextLayer(page, viewport);
-      
-      // Apply highlights for current page
-      highlightCurrentPageCitations();
       
     } catch (err) {
       console.error("Error rendering page:", err);
@@ -101,137 +103,153 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
   const renderTextLayer = async (page, viewport) => {
     if (!textLayerRef.current) return;
 
-    // Clear existing text layer
-    textLayerRef.current.innerHTML = "";
-    textLayerRef.current.style.width = viewport.width + "px";
-    textLayerRef.current.style.height = viewport.height + "px";
-
     try {
       const textContent = await page.getTextContent();
-      setTextLayer(textContent);
+      setPageTextContent(textContent);
 
-      // Render text items
+      // Clear existing text layer
+      textLayerRef.current.innerHTML = "";
+      textLayerRef.current.style.width = viewport.width + "px";
+      textLayerRef.current.style.height = viewport.height + "px";
+
+      // Create text layer elements
       textContent.items.forEach((textItem, index) => {
-        const textDiv = document.createElement("div");
-        textDiv.textContent = textItem.str;
-        textDiv.style.position = "absolute";
+        const textElement = document.createElement("span");
+        textElement.textContent = textItem.str;
+        textElement.className = "text-layer-item";
+        textElement.dataset.textIndex = index;
         
-        // Transform coordinates
-        const transform = textItem.transform;
-        const x = transform[4];
-        const y = viewport.height - transform[5];
+        // Calculate position and size
+        const tx = textItem.transform;
+        const fontHeight = Math.sqrt(tx[2] * tx[2] + tx[3] * tx[3]);
+        const fontAscent = fontHeight;
         
-        textDiv.style.left = x + "px";
-        textDiv.style.top = (y - textItem.height) + "px";
-        textDiv.style.fontSize = (textItem.height * scale) + "px";
-        textDiv.style.fontFamily = textItem.fontName || "sans-serif";
-        textDiv.style.color = "transparent";
-        textDiv.style.userSelect = "text";
-        textDiv.style.pointerEvents = "auto";
-        textDiv.dataset.textIndex = index;
+        const left = tx[4];
+        const top = viewport.height - tx[5] - fontAscent;
+        const fontSize = fontHeight;
         
-        textLayerRef.current.appendChild(textDiv);
+        // Apply styles for proper positioning
+        Object.assign(textElement.style, {
+          position: 'absolute',
+          left: left + 'px',
+          top: top + 'px',
+          fontSize: fontSize + 'px',
+          fontFamily: textItem.fontName || 'sans-serif',
+          color: 'transparent',
+          userSelect: 'text',
+          cursor: 'text',
+          whiteSpace: 'pre',
+          transformOrigin: '0 0',
+          // Make text selectable but invisible unless highlighted
+          WebkitUserSelect: 'text',
+          MozUserSelect: 'text',
+          msUserSelect: 'text'
+        });
+
+        textLayerRef.current.appendChild(textElement);
       });
+
     } catch (err) {
       console.error("Error rendering text layer:", err);
     }
   };
 
   const clearHighlights = () => {
-    if (textLayerRef.current) {
-      const highlightedElements = textLayerRef.current.querySelectorAll(".citation-highlight");
-      highlightedElements.forEach(el => {
-        el.classList.remove("citation-highlight");
-        el.style.backgroundColor = "";
-        el.style.color = "transparent";
-        el.style.opacity = "";
-        el.style.padding = "";
-        el.style.borderRadius = "";
-        el.style.zIndex = "";
-        el.style.position = "";
+    if (!textLayerRef.current) return;
+    
+    const highlightedElements = textLayerRef.current.querySelectorAll(".citation-highlight");
+    highlightedElements.forEach(el => {
+      el.classList.remove("citation-highlight");
+      Object.assign(el.style, {
+        backgroundColor: '',
+        color: 'transparent',
+        padding: '',
+        borderRadius: '',
+        boxShadow: '',
+        zIndex: ''
       });
-    }
+    });
   };
 
-  const highlightCurrentPageCitations = () => {
-    if (!textLayer || !textLayerRef.current) return;
+  const applyHighlights = () => {
+    if (!pageTextContent || !textLayerRef.current) return;
+
+    clearHighlights();
 
     // Get citations for current page
     const currentPageCitations = citedPagesMetadata.filter(citation => citation.page === currentPage);
     
     currentPageCitations.forEach(citation => {
-      highlightTextInLayer(citation);
+      highlightTextInPage(citation);
     });
   };
 
-  const highlightTextInLayer = (citation) => {
-    if (!textLayer || !textLayerRef.current) return;
+  const highlightTextInPage = (citation) => {
+    if (!pageTextContent || !textLayerRef.current) return;
 
     const searchText = citation.quote || citation.content_preview;
-    if (!searchText) return;
+    if (!searchText || searchText.length < 3) return;
 
-    // Clean up the search text for better matching
-    const cleanSearchText = searchText.replace(/\s+/g, ' ').trim().toLowerCase();
+    const textElements = textLayerRef.current.querySelectorAll('.text-layer-item');
+    const fullPageText = Array.from(textElements).map(el => el.textContent).join(' ');
     
-    const textItems = textLayerRef.current.querySelectorAll("div");
-    const fullPageText = Array.from(textItems).map(el => el.textContent).join(" ");
-    const cleanFullText = fullPageText.replace(/\s+/g, ' ').toLowerCase();
+    // Clean and normalize text for better matching
+    const cleanSearchText = searchText.replace(/\s+/g, ' ').trim();
+    const cleanPageText = fullPageText.replace(/\s+/g, ' ').trim();
     
-    // Find the citation text in the page
-    const searchIndex = cleanFullText.indexOf(cleanSearchText);
-    if (searchIndex === -1) {
-      // Try partial matching for better results
-      const words = cleanSearchText.split(' ');
-      const firstWord = words[0];
-      const partialIndex = cleanFullText.indexOf(firstWord);
-      if (partialIndex !== -1) {
-        highlightByWordMatching(citation, textItems);
-      }
-      return;
+    // Find the text in the page
+    const searchIndex = cleanPageText.toLowerCase().indexOf(cleanSearchText.toLowerCase());
+    
+    if (searchIndex !== -1) {
+      // Highlight exact match
+      highlightExactMatch(textElements, searchIndex, cleanSearchText.length);
+    } else {
+      // Try word-based matching as fallback
+      highlightWordMatch(textElements, cleanSearchText);
     }
+  };
 
-    // Highlight matching text divs
-    let charCount = 0;
-    textItems.forEach((textDiv, index) => {
-      const textContent = textDiv.textContent.replace(/\s+/g, ' ').trim();
-      const textLength = textContent.length;
-      const textStart = charCount;
-      const textEnd = charCount + textLength;
-
-      // Check if this text div overlaps with our search text
-      if (textStart <= searchIndex + cleanSearchText.length && textEnd >= searchIndex) {
-        textDiv.classList.add("citation-highlight");
-        textDiv.style.backgroundColor = "#ffff00 !important";
-        textDiv.style.color = "#000000 !important";
-        textDiv.style.opacity = "1";
-        textDiv.style.padding = "1px 2px";
-        textDiv.style.borderRadius = "2px";
-        textDiv.style.zIndex = "10";
-        textDiv.style.position = "relative";
+  const highlightExactMatch = (textElements, startIndex, searchLength) => {
+    let currentIndex = 0;
+    
+    textElements.forEach(element => {
+      const textLength = element.textContent.length;
+      const elementStart = currentIndex;
+      const elementEnd = currentIndex + textLength;
+      
+      // Check if this element overlaps with our search text
+      if (elementStart < startIndex + searchLength && elementEnd > startIndex) {
+        highlightElement(element);
       }
-
-      charCount = textEnd + 1; // +1 for space between text items
+      
+      currentIndex = elementEnd + 1; // +1 for space between elements
     });
   };
 
-  const highlightByWordMatching = (citation, textItems) => {
-    const searchText = (citation.quote || citation.content_preview).toLowerCase();
-    const words = searchText.split(/\s+/).filter(word => word.length > 3); // Only significant words
+  const highlightWordMatch = (textElements, searchText) => {
+    const words = searchText.toLowerCase().split(/\s+/).filter(word => word.length > 3);
     
-    textItems.forEach(textDiv => {
-      const textContent = textDiv.textContent.toLowerCase();
-      const matchedWords = words.filter(word => textContent.includes(word));
+    textElements.forEach(element => {
+      const elementText = element.textContent.toLowerCase();
+      const matchingWords = words.filter(word => elementText.includes(word));
       
-      if (matchedWords.length > 0) {
-        textDiv.classList.add("citation-highlight");
-        textDiv.style.backgroundColor = "#ffff00";
-        textDiv.style.color = "#000000";
-        textDiv.style.opacity = "0.8";
-        textDiv.style.padding = "1px 2px";
-        textDiv.style.borderRadius = "2px";
-        textDiv.style.zIndex = "10";
-        textDiv.style.position = "relative";
+      // Highlight if element contains significant words from the search text
+      if (matchingWords.length > 0 && matchingWords.length / words.length > 0.3) {
+        highlightElement(element);
       }
+    });
+  };
+
+  const highlightElement = (element) => {
+    element.classList.add("citation-highlight");
+    Object.assign(element.style, {
+      backgroundColor: '#ffeb3b',
+      color: '#000000',
+      padding: '2px 4px',
+      borderRadius: '3px',
+      boxShadow: '0 1px 3px rgba(255, 235, 59, 0.5)',
+      zIndex: '100',
+      position: 'relative'
     });
   };
 
@@ -244,7 +262,7 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
     // Set this citation as highlighted
     setHighlightedCitation(citation);
     
-    // Scroll citation into view after a short delay to ensure page is rendered
+    // Scroll container into view
     setTimeout(() => {
       if (containerRef.current) {
         containerRef.current.scrollIntoView({ 
@@ -252,7 +270,7 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
           block: "center" 
         });
       }
-    }, 100);
+    }, 200);
   };
 
   // Expose methods to parent component
@@ -299,19 +317,21 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
           <button
             onClick={handlePrevPage}
             disabled={currentPage <= 1 || loading}
-            className="p-1 rounded hover:bg-gray-200 disabled:opacity-50"
+            className="p-2 rounded hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
+            title="Previous page"
           >
             <ChevronLeftIcon className="w-5 h-5" />
           </button>
           
-          <span className="text-sm text-gray-600">
+          <span className="text-sm text-gray-600 min-w-[120px] text-center">
             {loading ? "Loading..." : `Page ${currentPage} of ${totalPages}`}
           </span>
           
           <button
             onClick={handleNextPage}
             disabled={currentPage >= totalPages || loading}
-            className="p-1 rounded hover:bg-gray-200 disabled:opacity-50"
+            className="p-2 rounded hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
+            title="Next page"
           >
             <ChevronRightIcon className="w-5 h-5" />
           </button>
@@ -321,7 +341,8 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
           <button
             onClick={handleZoomOut}
             disabled={scale <= 0.5}
-            className="p-1 rounded hover:bg-gray-200 disabled:opacity-50"
+            className="p-2 rounded hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
+            title="Zoom out"
           >
             <MagnifyingGlassMinusIcon className="w-5 h-5" />
           </button>
@@ -333,7 +354,8 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
           <button
             onClick={handleZoomIn}
             disabled={scale >= 3.0}
-            className="p-1 rounded hover:bg-gray-200 disabled:opacity-50"
+            className="p-2 rounded hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
+            title="Zoom in"
           >
             <MagnifyingGlassPlusIcon className="w-5 h-5" />
           </button>
@@ -352,24 +374,25 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
         ) : (
           <div className="min-h-full py-4">
             <div ref={containerRef} className="flex justify-center">
-              <div className="relative shadow-lg mb-4">
-                <canvas ref={canvasRef} className="block" />
+              <div className="relative shadow-lg bg-white">
+                <canvas ref={canvasRef} className="block max-w-full" />
+                
                 {/* Text layer for selection and highlighting */}
                 <div
                   ref={textLayerRef}
-                  className="absolute top-0 left-0"
+                  className="absolute top-0 left-0 text-layer"
                   style={{ 
-                    fontSize: "1px",
-                    lineHeight: 1,
-                    pointerEvents: "none",
+                    pointerEvents: 'auto',
+                    userSelect: 'text',
                   }}
                 />
+                
                 {/* Loading overlay */}
                 {loading && (
-                  <div className="absolute inset-0 bg-white bg-opacity-75 flex items-center justify-center">
+                  <div className="absolute inset-0 bg-white bg-opacity-90 flex items-center justify-center">
                     <div className="flex items-center space-x-2">
-                      <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600"></div>
-                      <span>Loading...</span>
+                      <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+                      <span className="text-lg text-gray-700">Loading page...</span>
                     </div>
                   </div>
                 )}
@@ -379,22 +402,39 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
         )}
       </div>
 
-      {/* Enhanced CSS for highlights */}
+      {/* Enhanced CSS for text layer and highlights */}
       <style jsx>{`
+        .text-layer {
+          font-size: 1px;
+          line-height: 1;
+        }
+        
+        .text-layer-item {
+          position: absolute;
+          color: transparent;
+          user-select: text;
+          cursor: text;
+          white-space: pre;
+          transform-origin: 0 0;
+        }
+        
         .citation-highlight {
-          background-color: #ffff00 !important;
+          background-color: #ffeb3b !important;
           color: #000000 !important;
-          opacity: 1 !important;
-          padding: 1px 2px !important;
-          border-radius: 2px !important;
-          z-index: 10 !important;
+          padding: 2px 4px !important;
+          border-radius: 3px !important;
+          box-shadow: 0 1px 3px rgba(255, 235, 59, 0.5) !important;
+          z-index: 100 !important;
           position: relative !important;
-          pointer-events: auto !important;
         }
         
         .citation-highlight:hover {
-          background-color: #ffeb3b !important;
-          box-shadow: 0 1px 3px rgba(0,0,0,0.2) !important;
+          background-color: #ffc107 !important;
+          box-shadow: 0 2px 6px rgba(255, 193, 7, 0.6) !important;
+        }
+        
+        .text-layer-item::selection {
+          background-color: rgba(0, 123, 255, 0.3);
         }
       `}</style>
     </div>
