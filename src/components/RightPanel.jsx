@@ -83,16 +83,17 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
       // Clear previous content
       context.clearRect(0, 0, canvas.width, canvas.height);
 
-      // Render PDF page WITHOUT text (text will be rendered separately)
+      // Render PDF page with reduced text visibility
       const renderContext = {
         canvasContext: context,
-        viewport: viewport,
-        // Disable text rendering completely on canvas
-        intent: 'display'
+        viewport: viewport
       };
       
-      const renderTask = page.render(renderContext);
-      await renderTask.promise;
+      await page.render(renderContext).promise;
+      
+      // Apply CSS filter to make canvas text less visible
+      canvas.style.filter = 'contrast(0.3) brightness(1.5)';
+      canvas.style.opacity = '0.7';
 
       // Render actual selectable text layer
       await renderTextLayer(page, viewport);
@@ -128,44 +129,44 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
       // Clear and prepare the text layer
       textLayerDiv.innerHTML = '';
       
-      // Create text layer elements with PDF.js standard positioning
+      // Create text elements with exact PDF positioning
       textContent.items.forEach((textItem, index) => {
         const textElement = document.createElement('span');
         textElement.textContent = textItem.str;
         textElement.dataset.textIndex = index;
         
-        // Get transformation matrix from PDF.js
-        const transform = textItem.transform;
-        const [scaleX, skewX, skewY, scaleY, translateX, translateY] = transform;
+        // Extract positioning from PDF transform matrix
+        const [a, b, c, d, e, f] = textItem.transform;
         
-        // Calculate proper positioning
-        const fontSize = Math.sqrt(scaleY * scaleY + skewY * skewY);
-        const fontWidth = Math.sqrt(scaleX * scaleX + skewX * skewX);
+        // Calculate font size and position
+        const fontSize = Math.abs(d);
+        const x = e;
+        const y = viewport.height - f;
         
-        // Position text element
+        // Apply positioning and styling
         textElement.style.position = 'absolute';
-        textElement.style.left = translateX + 'px';
-        textElement.style.top = (viewport.height - translateY - fontSize) + 'px';
+        textElement.style.left = x + 'px';
+        textElement.style.top = (y - fontSize) + 'px';
         textElement.style.fontSize = fontSize + 'px';
         textElement.style.fontFamily = textItem.fontName || 'sans-serif';
-        textElement.style.color = '#000';
+        textElement.style.color = '#000000';
         textElement.style.whiteSpace = 'pre';
-        textElement.style.transformOrigin = '0% 0%';
+        textElement.style.transformOrigin = '0 0';
         
-        // Apply transformation if needed (for rotated or skewed text)
-        if (scaleX !== fontWidth || skewX !== 0 || skewY !== 0 || scaleY !== -fontSize) {
-          const normalizedScaleX = scaleX / fontWidth;
-          const normalizedSkewX = skewX / fontWidth;
-          const normalizedSkewY = -skewY / fontSize;
-          const normalizedScaleY = -scaleY / fontSize;
-          
-          textElement.style.transform = `matrix(${normalizedScaleX}, ${-normalizedSkewX}, ${normalizedSkewY}, ${normalizedScaleY}, 0, 0)`;
+        // Handle text rotation/skewing if present
+        if (a !== fontSize || b !== 0 || c !== 0) {
+          const scaleX = a / fontSize;
+          const skewY = -c / fontSize;
+          const skewX = b / fontSize;
+          const scaleY = -d / fontSize;
+          textElement.style.transform = `matrix(${scaleX}, ${skewX}, ${skewY}, ${scaleY}, 0, 0)`;
         }
         
         // Make text selectable
         textElement.style.userSelect = 'text';
         textElement.style.cursor = 'text';
         textElement.style.pointerEvents = 'auto';
+        textElement.style.zIndex = '10';
         
         textElement.className = 'pdf-text-item';
         textLayerDiv.appendChild(textElement);
