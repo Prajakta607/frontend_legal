@@ -162,6 +162,11 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
       // If no exact match, try flexible pattern matching
       if (matches.length === 0) {
         const flexibleRegex = createFlexiblePattern(cleanSearchText);
+      
+      
+      
+      
+      
         const normalizedContent = normalizeText(highlightedContent);
         const normalizedMatches = [...normalizedContent.matchAll(flexibleRegex)];
         
