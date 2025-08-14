@@ -111,6 +111,25 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
     }
   };
 
+  const normalizeText = (text) => {
+    return text
+      .replace(/\s+/g, ' ')  // Normalize whitespace
+      .replace(/[,.\-&]/g, ' ')  // Replace punctuation with spaces
+      .replace(/\s+/g, ' ')  // Clean up multiple spaces again
+      .trim()
+      .toLowerCase();
+  };
+
+  const createFlexiblePattern = (searchText) => {
+    // Normalize the search text
+    const normalized = normalizeText(searchText);
+    const words = normalized.split(/\s+/).filter(word => word.length > 1);
+    
+    // Create a pattern that allows for flexible punctuation and spacing
+    const pattern = words.map(word => escapeRegExp(word)).join('\\s*[,.\-&]*\\s*');
+    return new RegExp(pattern, 'gi');
+  };
+
   const applyHighlights = () => {
     if (!pageText) {
       setHighlightedText('');
@@ -132,15 +151,59 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
       const searchText = citation.quote || citation.content_preview;
       if (!searchText || searchText.length < 3) return;
 
-      // Clean and normalize search text
+      // Clean and normalize search text for better matching
       const cleanSearchText = searchText.replace(/\s+/g, ' ').trim();
       
-      // Find exact matches first
-      const regex = new RegExp(escapeRegExp(cleanSearchText), 'gi');
-      const matches = [...highlightedContent.matchAll(regex)];
+      // Try exact match first with flexible whitespace
+      const flexibleSearchText = cleanSearchText.replace(/\s+/g, '\\s+');
+      const exactRegex = new RegExp(escapeRegExp(flexibleSearchText), 'gi');
+      let matches = [...highlightedContent.matchAll(exactRegex)];
+      
+      // If no exact match, try flexible pattern matching
+      if (matches.length === 0) {
+        const flexibleRegex = createFlexiblePattern(cleanSearchText);
+        const normalizedContent = normalizeText(highlightedContent);
+        const normalizedMatches = [...normalizedContent.matchAll(flexibleRegex)];
+        
+        // Find corresponding positions in original text
+        if (normalizedMatches.length > 0) {
+          normalizedMatches.forEach(match => {
+            const matchText = match[0];
+            const words = normalizeText(cleanSearchText).split(/\s+/).filter(word => word.length > 1);
+            
+            // Create a more flexible regex for the original text
+            const flexiblePattern = words.map(word => 
+              `(?=.*\\b${escapeRegExp(word)}\\b)`
+            ).join('') + '.*?' + words.map(word => 
+              `\\b${escapeRegExp(word)}\\b`
+            ).join('[\\s,.\-&]*');
+            
+            const originalRegex = new RegExp(flexiblePattern, 'gis');
+            const originalMatches = [...highlightedContent.matchAll(originalRegex)];
+            
+            matches = originalMatches;
+          });
+        }
+      }
+      
+      // If still no matches, try word-by-word approach
+      if (matches.length === 0) {
+        const words = cleanSearchText.split(/\s+/).filter(word => word.length > 2);
+        
+        if (words.length > 1) {
+          // Try to find sequences of words with flexible separators
+          const wordPatterns = words.map(word => word.replace(/[,.\-&]/g, ''));
+          const sequencePattern = wordPatterns.map(word => 
+            `\\b${escapeRegExp(word)}\\b`
+          ).join('[\\s,.\-&]*');
+          
+          const sequenceRegex = new RegExp(sequencePattern, 'gi');
+          matches = [...highlightedContent.matchAll(sequenceRegex)];
+        }
+      }
       
       if (matches.length > 0) {
-        // Replace matches with highlighted versions
+        // Replace matches with highlighted versions (in reverse order to maintain indices)
         matches.reverse().forEach(match => {
           const start = match.index;
           const end = start + match[0].length;
@@ -152,13 +215,84 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
             highlightedContent.slice(end);
         });
       } else {
-        // Fallback: highlight individual words if exact match not found
-        const words = cleanSearchText.split(/\s+/).filter(word => word.length > 3);
+        // Final fallback: highlight individual words
+        const words = cleanSearchText.split(/\s+/).filter(word => word.length > 2);
         words.forEach(word => {
-          const wordRegex = new RegExp(`\\b${escapeRegExp(word)}\\b`, 'gi');
-          highlightedContent = highlightedContent.replace(wordRegex, 
-            `<mark class="citation-highlight-word" data-citation-id="${index}">$&</mark>`
-          );
+          const cleanWord = word.replace(/[,.\-&]/g, '');
+          if (cleanWord.length > 2) {
+            const wordRegex = new RegExp(`\\b${escapeRegExp(cleanWord)}\\b`, 'gi');
+            highlightedContent = highlightedContent.replace(wordRegex, 
+              `<mark class="citation-highlight-word" data-citation-id="${index}">  const applyHighlights = () => {
+    if (!pageText) {
+      setHighlightedText('');
+      return;
+    }
+
+    // Get citations for current page
+    const currentPageCitations = citedPagesMetadata.filter(citation => citation.page === currentPage);
+    
+    if (currentPageCitations.length === 0) {
+      setHighlightedText(pageText);
+      return;
+    }
+
+    let highlightedContent = pageText;
+    
+    // Apply highlights for each citation
+    currentPageCitations.forEach((citation, index) => {
+      const searchText = citation.quote || citation.content_preview;
+      if (!searchText || searchText.length < 3) return;
+
+      // Clean and normalize search text for better matching
+      const cleanSearchText = searchText.replace(/\s+/g, ' ').trim();
+      
+      // Create flexible regex that handles various whitespace patterns
+      const flexibleSearchText = cleanSearchText.replace(/\s+/g, '\\s+');
+      const regex = new RegExp(escapeRegExp(flexibleSearchText), 'gi');
+      
+      // Find matches with flexible whitespace
+      const matches = [...highlightedContent.matchAll(regex)];
+      
+      if (matches.length > 0) {
+        // Replace matches with highlighted versions (in reverse order to maintain indices)
+        matches.reverse().forEach(match => {
+          const start = match.index;
+          const end = start + match[0].length;
+          const highlightId = `highlight-${index}-${start}`;
+          
+          highlightedContent = 
+            highlightedContent.slice(0, start) +
+            `<mark class="citation-highlight" data-citation-id="${index}" id="${highlightId}">${match[0]}</mark>` +
+            highlightedContent.slice(end);
+        });
+      } else {
+        // Fallback: Try with more flexible approach
+        const words = cleanSearchText.split(/\s+/).filter(word => word.length > 2);
+        
+        if (words.length > 1) {
+          // For multi-word phrases, create a pattern that allows for varying whitespace
+          const pattern = words.map(word => escapeRegExp(word)).join('\\s+');
+          const multiWordRegex = new RegExp(`\\b${pattern}\\b`, 'gi');
+          
+          highlightedContent = highlightedContent.replace(multiWordRegex, (match) => {
+            return `<mark class="citation-highlight" data-citation-id="${index}">${match}</mark>`;
+          });
+        } else {
+          // Single word highlighting
+          words.forEach(word => {
+            const wordRegex = new RegExp(`\\b${escapeRegExp(word)}\\b`, 'gi');
+            highlightedContent = highlightedContent.replace(wordRegex, 
+              `<mark class="citation-highlight-word" data-citation-id="${index}">$&</mark>`
+            );
+          });
+        }
+      }
+    });
+
+    setHighlightedText(highlightedContent);
+  };</mark>`
+            );
+          }
         });
       }
     });
@@ -399,7 +533,7 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
         )}
       </div>
 
-      {/* Styles for text highlighting */}
+      {/* Enhanced Styles for consistent text highlighting */}
       <style jsx>{`
         .text-content {
           user-select: text;
@@ -410,12 +544,16 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
         
         .citation-highlight {
           background-color: #FFEB3B !important;
-          padding: 2px 4px !important;
-          border-radius: 3px !important;
+          padding: 3px 5px !important;
+          border-radius: 4px !important;
           box-shadow: 0 1px 3px rgba(255, 235, 59, 0.4) !important;
           border: 1px solid #FFC107 !important;
           color: #000 !important;
           font-weight: 500 !important;
+          display: inline !important;
+          line-height: inherit !important;
+          /* Ensure spaces are also highlighted */
+          white-space: pre-wrap !important;
         }
         
         .citation-highlight:hover {
@@ -424,10 +562,19 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
         }
         
         .citation-highlight-word {
-          background-color: rgba(255, 235, 59, 0.6) !important;
-          padding: 1px 2px !important;
-          border-radius: 2px !important;
+          background-color: rgba(255, 235, 59, 0.7) !important;
+          padding: 2px 3px !important;
+          border-radius: 3px !important;
           color: #000 !important;
+          display: inline !important;
+          line-height: inherit !important;
+        }
+        
+        /* Ensure consistent highlighting across word boundaries */
+        .citation-highlight *,
+        .citation-highlight-word * {
+          background-color: inherit !important;
+          color: inherit !important;
         }
         
         .text-content::selection {
@@ -443,6 +590,13 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
           -webkit-user-select: text !important;
           -moz-user-select: text !important;
           -ms-user-select: text !important;
+        }
+        
+        /* Handle whitespace in highlights consistently */
+        .text-content .citation-highlight,
+        .text-content .citation-highlight-word {
+          word-spacing: normal !important;
+          letter-spacing: normal !important;
         }
       `}</style>
     </div>
