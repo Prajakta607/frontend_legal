@@ -1,12 +1,30 @@
 import React, { useState, useEffect, useRef, forwardRef, useImperativeHandle } from "react";
 import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf";
-import { ChevronLeftIcon, ChevronRightIcon, DocumentTextIcon } from "@heroicons/react/24/outline";
 
-// Set up PDF.js worker
+// Set up PDF.js worker with a more reliable CDN
 pdfjsLib.GlobalWorkerOptions.workerSrc =
-  "https://unpkg.com/pdfjs-dist@3.11.174/build/pdf.worker.min.js";
+  "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
 
-const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata, docId }, ref) {
+// Fallback icons if heroicons is not available
+const ChevronLeftIcon = ({ className }) => (
+  <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+  </svg>
+);
+
+const ChevronRightIcon = ({ className }) => (
+  <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+  </svg>
+);
+
+const DocumentTextIcon = ({ className }) => (
+  <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+  </svg>
+);
+
+const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata = [], docId }, ref) {
   const [pdf, setPdf] = useState(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [totalPages, setTotalPages] = useState(0);
@@ -17,18 +35,34 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
 
   const containerRef = useRef();
   const textContainerRef = useRef();
+  const pdfRef = useRef(null);
+
+  // Cleanup function
+  const cleanup = () => {
+    if (pdfRef.current) {
+      try {
+        pdfRef.current.destroy();
+      } catch (err) {
+        console.warn("PDF cleanup warning:", err);
+      }
+      pdfRef.current = null;
+    }
+  };
 
   // Load PDF when file changes
   useEffect(() => {
     if (pdfFile) {
       loadPDF(pdfFile);
     } else {
+      cleanup();
       setPdf(null);
       setCurrentPage(1);
       setTotalPages(0);
       setError(null);
       setPageText('');
     }
+
+    return cleanup; // Cleanup on unmount
   }, [pdfFile]);
 
   // Extract text when PDF or page changes
@@ -50,14 +84,24 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
     setError(null);
     
     try {
+      // Cleanup previous PDF
+      cleanup();
+      
       const arrayBuffer = await file.arrayBuffer();
-      const pdfDoc = await pdfjsLib.getDocument({ data: new Uint8Array(arrayBuffer) }).promise;
+      const loadingTask = pdfjsLib.getDocument({ 
+        data: new Uint8Array(arrayBuffer),
+        cMapUrl: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/cmaps/',
+        cMapPacked: true,
+      });
+      
+      const pdfDoc = await loadingTask.promise;
+      pdfRef.current = pdfDoc;
       setPdf(pdfDoc);
       setTotalPages(pdfDoc.numPages);
       setCurrentPage(1);
     } catch (err) {
       console.error("Error loading PDF:", err);
-      setError("Failed to load PDF file");
+      setError(`Failed to load PDF file: ${err.message || 'Unknown error'}`);
     } finally {
       setLoading(false);
     }
@@ -71,12 +115,20 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
       const page = await pdf.getPage(pageNum);
       const textContent = await page.getTextContent();
       
+      if (!textContent.items || textContent.items.length === 0) {
+        setPageText('');
+        setLoading(false);
+        return;
+      }
+      
       // Extract text with proper spacing
       let extractedText = '';
       let lastY = null;
       
       textContent.items.forEach((item, index) => {
-        const currentY = item.transform[5];
+        if (!item.str) return;
+        
+        const currentY = item.transform ? item.transform[5] : 0;
         
         // Add line breaks for significant vertical position changes
         if (lastY !== null && Math.abs(lastY - currentY) > 5) {
@@ -88,12 +140,12 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
         
         // Add space if next item is far horizontally or this item doesn't end with space
         const nextItem = textContent.items[index + 1];
-        if (nextItem) {
-          const currentX = item.transform[4] + (item.width || 0);
+        if (nextItem && nextItem.transform) {
+          const currentX = (item.transform ? item.transform[4] : 0) + (item.width || 0);
           const nextX = nextItem.transform[4];
           const sameY = Math.abs(currentY - nextItem.transform[5]) < 2;
           
-          if (sameY && nextX - currentX > 5) {
+          if (sameY && nextX - currentX > 5 && !item.str.endsWith(' ')) {
             extractedText += ' ';
           }
         }
@@ -105,29 +157,15 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
       
     } catch (err) {
       console.error("Error extracting text:", err);
-      setError("Failed to extract text from page");
+      setError(`Failed to extract text from page ${pageNum}: ${err.message || 'Unknown error'}`);
+      setPageText('');
     } finally {
       setLoading(false);
     }
   };
 
-  const normalizeText = (text) => {
-    return text
-      .replace(/\s+/g, ' ')  // Normalize whitespace
-      .replace(/[,.\-&]/g, ' ')  // Replace punctuation with spaces
-      .replace(/\s+/g, ' ')  // Clean up multiple spaces again
-      .trim()
-      .toLowerCase();
-  };
-
-  const createFlexiblePattern = (searchText) => {
-    // Normalize the search text
-    const normalized = normalizeText(searchText);
-    const words = normalized.split(/\s+/).filter(word => word.length > 1);
-    
-    // Create a pattern that allows for flexible punctuation and spacing
-    const pattern = words.map(word => escapeRegExp(word)).join('\\s*[,.\-&]*\\s*');
-    return new RegExp(pattern, 'gi');
+  const escapeRegExp = (string) => {
+    return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   };
 
   const applyHighlights = () => {
@@ -137,7 +175,9 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
     }
 
     // Get citations for current page
-    const currentPageCitations = citedPagesMetadata.filter(citation => citation.page === currentPage);
+    const currentPageCitations = Array.isArray(citedPagesMetadata) 
+      ? citedPagesMetadata.filter(citation => citation && citation.page === currentPage)
+      : [];
     
     if (currentPageCitations.length === 0) {
       setHighlightedText(pageText);
@@ -151,119 +191,100 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
       const searchText = citation.quote || citation.content_preview;
       if (!searchText || searchText.length < 3) return;
 
-      // Clean and normalize search text for better matching
-      const cleanSearchText = searchText.replace(/\s+/g, ' ').trim();
-      
-      // Try exact match first with flexible whitespace
-      const flexibleSearchText = cleanSearchText.replace(/\s+/g, '\\s+');
-      const exactRegex = new RegExp(escapeRegExp(flexibleSearchText), 'gi');
-      let matches = [...highlightedContent.matchAll(exactRegex)];
-      
-      // If no exact match, try flexible pattern matching
-      if (matches.length === 0) {
-        const flexibleRegex = createFlexiblePattern(cleanSearchText);
-      
-      
-      
-      
-      
-        const normalizedContent = normalizeText(highlightedContent);
-        const normalizedMatches = [...normalizedContent.matchAll(flexibleRegex)];
+      try {
+        // Clean and normalize search text for better matching
+        const cleanSearchText = searchText.replace(/\s+/g, ' ').trim();
         
-        // Find corresponding positions in original text
-        if (normalizedMatches.length > 0) {
-          normalizedMatches.forEach(match => {
-            const matchText = match[0];
-            const words = normalizeText(cleanSearchText).split(/\s+/).filter(word => word.length > 1);
-            
-            // Create a more flexible regex for the original text
-            const flexiblePattern = words.map(word => 
-              `(?=.*\\b${escapeRegExp(word)}\\b)`
-            ).join('') + '.*?' + words.map(word => 
+        // Try exact match first with flexible whitespace
+        const flexibleSearchText = cleanSearchText.replace(/\s+/g, '\\s+');
+        const exactRegex = new RegExp(escapeRegExp(flexibleSearchText), 'gi');
+        let matches = [...highlightedContent.matchAll(exactRegex)];
+        
+        // If no exact match, try flexible pattern matching for multi-word phrases
+        if (matches.length === 0) {
+          const words = cleanSearchText.split(/\s+/).filter(word => word.length > 2);
+          
+          if (words.length > 1) {
+            // Create pattern that allows for punctuation and flexible spacing
+            const wordPatterns = words.map(word => word.replace(/[,.\-&()]/g, ''));
+            const sequencePattern = wordPatterns.map(word => 
               `\\b${escapeRegExp(word)}\\b`
-            ).join('[\\s,.\-&]*');
+            ).join('[\\s,.&()\\-]*');
             
-            const originalRegex = new RegExp(flexiblePattern, 'gis');
-            const originalMatches = [...highlightedContent.matchAll(originalRegex)];
+            const sequenceRegex = new RegExp(sequencePattern, 'gi');
+            matches = [...highlightedContent.matchAll(sequenceRegex)];
+          }
+        }
+        
+        if (matches.length > 0) {
+          // Replace matches with highlighted versions (in reverse order to maintain indices)
+          matches.reverse().forEach(match => {
+            const start = match.index;
+            const end = start + match[0].length;
+            const highlightId = `highlight-${index}-${start}`;
             
-            matches = originalMatches;
+            highlightedContent = 
+              highlightedContent.slice(0, start) +
+              `<mark class="citation-highlight" data-citation-id="${index}" id="${highlightId}">${match[0]}</mark>` +
+              highlightedContent.slice(end);
+          });
+        } else {
+          // Final fallback: highlight individual words
+          const words = cleanSearchText.split(/\s+/).filter(word => word.length > 2);
+          words.forEach(word => {
+            const cleanWord = word.replace(/[,.\-&()]/g, '');
+            if (cleanWord.length > 2) {
+              const wordRegex = new RegExp(`\\b${escapeRegExp(cleanWord)}\\b`, 'gi');
+              highlightedContent = highlightedContent.replace(wordRegex, 
+                `<mark class="citation-highlight-word" data-citation-id="${index}">$&</mark>`
+              );
+            }
           });
         }
-      }
-      
-      // If still no matches, try word-by-word approach
-      if (matches.length === 0) {
-        const words = cleanSearchText.split(/\s+/).filter(word => word.length > 2);
-        
-        if (words.length > 1) {
-          // Try to find sequences of words with flexible separators
-          const wordPatterns = words.map(word => word.replace(/[,.\-&]/g, ''));
-          const sequencePattern = wordPatterns.map(word => 
-            `\\b${escapeRegExp(word)}\\b`
-          ).join('[\\s,.\-&]*');
-          
-          const sequenceRegex = new RegExp(sequencePattern, 'gi');
-          matches = [...highlightedContent.matchAll(sequenceRegex)];
-        }
-      }
-      
-      if (matches.length > 0) {
-        // Replace matches with highlighted versions (in reverse order to maintain indices)
-        matches.reverse().forEach(match => {
-          const start = match.index;
-          const end = start + match[0].length;
-          const highlightId = `highlight-${index}-${start}`;
-          
-          highlightedContent = 
-            highlightedContent.slice(0, start) +
-            `<mark class="citation-highlight" data-citation-id="${index}" id="${highlightId}">${match[0]}</mark>` +
-            highlightedContent.slice(end);
-        });
-      } else {
-        // Final fallback: highlight individual words
-        const words = cleanSearchText.split(/\s+/).filter(word => word.length > 2);
-        words.forEach(word => {
-          const cleanWord = word.replace(/[,.\-&]/g, '');
-          if (cleanWord.length > 2) {
-            const wordRegex = new RegExp(`\\b${escapeRegExp(cleanWord)}\\b`, 'gi');
-            highlightedContent = highlightedContent.replace(wordRegex, 
-              `<mark class="citation-highlight-word" data-citation-id="${index}"></mark>`
-            );
-          }
-        });
+      } catch (regexError) {
+        console.warn("Regex error in highlighting:", regexError);
       }
     });
 
     setHighlightedText(highlightedContent);
   };
 
-  const escapeRegExp = (string) => {
-    return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  };
-
-  const copySelectedText = () => {
-    const selection = window.getSelection();
-    if (selection.rangeCount > 0) {
-      const selectedText = selection.toString().trim();
-      if (selectedText) {
-        navigator.clipboard.writeText(selectedText).then(() => {
-          showCopyFeedback();
-        }).catch(err => {
-          console.error('Copy failed:', err);
-          fallbackCopyText(selectedText);
-        });
+  const copySelectedText = async () => {
+    try {
+      const selection = window.getSelection();
+      if (selection.rangeCount > 0) {
+        const selectedText = selection.toString().trim();
+        if (selectedText) {
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(selectedText);
+            showCopyFeedback();
+          } else {
+            fallbackCopyText(selectedText);
+          }
+        }
+      }
+    } catch (err) {
+      console.error('Copy failed:', err);
+      const selection = window.getSelection();
+      if (selection.rangeCount > 0) {
+        fallbackCopyText(selection.toString().trim());
       }
     }
   };
 
-  const copyAllText = () => {
+  const copyAllText = async () => {
     if (pageText) {
-      navigator.clipboard.writeText(pageText).then(() => {
-        showCopyFeedback('All text copied!');
-      }).catch(err => {
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          await navigator.clipboard.writeText(pageText);
+          showCopyFeedback('All text copied!');
+        } else {
+          fallbackCopyText(pageText);
+        }
+      } catch (err) {
         console.error('Copy failed:', err);
         fallbackCopyText(pageText);
-      });
+      }
     }
   };
 
@@ -279,8 +300,8 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
     feedback.textContent = message;
     feedback.style.cssText = `
       position: fixed;
-      top: ${rect.top - 35}px;
-      left: ${rect.left + rect.width / 2 - 50}px;
+      top: ${Math.max(10, rect.top - 35)}px;
+      left: ${Math.max(10, Math.min(window.innerWidth - 110, rect.left + rect.width / 2 - 50))}px;
       background: #4CAF50;
       color: white;
       padding: 8px 16px;
@@ -289,7 +310,7 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
       z-index: 10000;
       pointer-events: none;
       box-shadow: 0 4px 12px rgba(0,0,0,0.3);
-      font-family: system-ui;
+      font-family: system-ui, -apple-system, sans-serif;
     `;
     
     document.body.appendChild(feedback);
@@ -310,14 +331,17 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
     textArea.focus();
     textArea.select();
     try {
-      document.execCommand('copy');
-      showCopyFeedback();
+      const successful = document.execCommand('copy');
+      if (successful) {
+        showCopyFeedback();
+      }
     } catch (err) {
       console.error('Fallback copy failed:', err);
     }
     document.body.removeChild(textArea);
   };
 
+  // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e) => {
       if ((e.ctrlKey || e.metaKey)) {
@@ -332,24 +356,41 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
           copyAllText();
         }
       }
+      
+      // Page navigation shortcuts
+      if (e.key === 'ArrowLeft' && e.altKey) {
+        e.preventDefault();
+        handlePrevPage();
+      } else if (e.key === 'ArrowRight' && e.altKey) {
+        e.preventDefault();
+        handleNextPage();
+      }
     };
 
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [pageText]);
+  }, [pageText, currentPage, totalPages]);
 
   const scrollToCitation = (citation) => {
+    if (!citation) return;
+    
     if (citation.page !== currentPage) {
       setCurrentPage(citation.page);
     }
     
     setTimeout(() => {
-      const highlightElements = document.querySelectorAll(`[data-citation-id="${citedPagesMetadata.indexOf(citation)}"]`);
-      if (highlightElements.length > 0) {
-        highlightElements[0].scrollIntoView({ 
-          behavior: "smooth", 
-          block: "center" 
-        });
+      const citationIndex = Array.isArray(citedPagesMetadata) 
+        ? citedPagesMetadata.indexOf(citation) 
+        : -1;
+        
+      if (citationIndex >= 0) {
+        const highlightElements = document.querySelectorAll(`[data-citation-id="${citationIndex}"]`);
+        if (highlightElements.length > 0) {
+          highlightElements[0].scrollIntoView({ 
+            behavior: "smooth", 
+            block: "center" 
+          });
+        }
       }
     }, 300);
   };
@@ -357,7 +398,12 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
   useImperativeHandle(ref, () => ({
     scrollToCitation,
     copySelectedText,
-    copyAllText
+    copyAllText,
+    goToPage: (pageNum) => {
+      if (pageNum >= 1 && pageNum <= totalPages) {
+        setCurrentPage(pageNum);
+      }
+    }
   }));
 
   const handlePrevPage = () => {
@@ -393,7 +439,7 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
             onClick={handlePrevPage}
             disabled={currentPage <= 1 || loading}
             className="p-2 rounded-lg hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            title="Previous page"
+            title="Previous page (Alt + ←)"
           >
             <ChevronLeftIcon className="w-5 h-5" />
           </button>
@@ -406,7 +452,7 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
             onClick={handleNextPage}
             disabled={currentPage >= totalPages || loading}
             className="p-2 rounded-lg hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            title="Next page"
+            title="Next page (Alt + →)"
           >
             <ChevronRightIcon className="w-5 h-5" />
           </button>
@@ -415,16 +461,18 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
         <div className="flex items-center space-x-3">
           <button
             onClick={copySelectedText}
-            className="px-4 py-2 rounded-lg hover:bg-gray-100 text-sm text-gray-700 border border-gray-300 transition-colors"
-            title="Copy selected text (Ctrl+C)"
+            disabled={loading}
+            className="px-4 py-2 rounded-lg hover:bg-gray-100 text-sm text-gray-700 border border-gray-300 transition-colors disabled:opacity-50"
+            title="Copy selected text (Ctrl/Cmd + C)"
           >
             📋 Copy Selection
           </button>
           
           <button
             onClick={copyAllText}
-            className="px-4 py-2 rounded-lg hover:bg-blue-50 text-sm text-blue-700 border border-blue-300 transition-colors"
-            title="Copy all page text (Ctrl+Shift+A)"
+            disabled={loading || !pageText}
+            className="px-4 py-2 rounded-lg hover:bg-blue-50 text-sm text-blue-700 border border-blue-300 transition-colors disabled:opacity-50"
+            title="Copy all page text (Ctrl/Cmd + Shift + A)"
           >
             📄 Copy All
           </button>
@@ -434,10 +482,18 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
       {/* Text Content */}
       <div className="flex-1 overflow-auto">
         {error ? (
-          <div className="flex items-center justify-center h-full text-red-500">
-            <div className="text-center">
+          <div className="flex items-center justify-center h-full text-red-500 p-6">
+            <div className="text-center max-w-md">
               <div className="text-lg mb-2">Error loading PDF</div>
-              <div className="text-sm">{error}</div>
+              <div className="text-sm bg-red-50 p-3 rounded-lg border border-red-200">
+                {error}
+              </div>
+              <button 
+                onClick={() => pdfFile && loadPDF(pdfFile)}
+                className="mt-4 px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors"
+              >
+                Retry
+              </button>
             </div>
           </div>
         ) : (
@@ -489,13 +545,14 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
           font-weight: 500 !important;
           display: inline !important;
           line-height: inherit !important;
-          /* Ensure spaces are also highlighted */
           white-space: pre-wrap !important;
+          transition: all 0.2s ease !important;
         }
         
         .citation-highlight:hover {
           background-color: #FFC107 !important;
           box-shadow: 0 2px 6px rgba(255, 193, 7, 0.6) !important;
+          transform: translateY(-1px) !important;
         }
         
         .citation-highlight-word {
@@ -505,9 +562,13 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
           color: #000 !important;
           display: inline !important;
           line-height: inherit !important;
+          transition: all 0.2s ease !important;
         }
         
-        /* Ensure consistent highlighting across word boundaries */
+        .citation-highlight-word:hover {
+          background-color: rgba(255, 193, 7, 0.8) !important;
+        }
+        
         .citation-highlight *,
         .citation-highlight-word * {
           background-color: inherit !important;
@@ -529,11 +590,17 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
           -ms-user-select: text !important;
         }
         
-        /* Handle whitespace in highlights consistently */
         .text-content .citation-highlight,
         .text-content .citation-highlight-word {
           word-spacing: normal !important;
           letter-spacing: normal !important;
+        }
+        
+        @media (max-width: 768px) {
+          .citation-highlight {
+            padding: 2px 3px !important;
+            font-size: 14px !important;
+          }
         }
       `}</style>
     </div>
