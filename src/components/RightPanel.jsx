@@ -222,75 +222,7 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
           if (cleanWord.length > 2) {
             const wordRegex = new RegExp(`\\b${escapeRegExp(cleanWord)}\\b`, 'gi');
             highlightedContent = highlightedContent.replace(wordRegex, 
-              `<mark class="citation-highlight-word" data-citation-id="${index}">  const applyHighlights = () => {
-    if (!pageText) {
-      setHighlightedText('');
-      return;
-    }
-
-    // Get citations for current page
-    const currentPageCitations = citedPagesMetadata.filter(citation => citation.page === currentPage);
-    
-    if (currentPageCitations.length === 0) {
-      setHighlightedText(pageText);
-      return;
-    }
-
-    let highlightedContent = pageText;
-    
-    // Apply highlights for each citation
-    currentPageCitations.forEach((citation, index) => {
-      const searchText = citation.quote || citation.content_preview;
-      if (!searchText || searchText.length < 3) return;
-
-      // Clean and normalize search text for better matching
-      const cleanSearchText = searchText.replace(/\s+/g, ' ').trim();
-      
-      // Create flexible regex that handles various whitespace patterns
-      const flexibleSearchText = cleanSearchText.replace(/\s+/g, '\\s+');
-      const regex = new RegExp(escapeRegExp(flexibleSearchText), 'gi');
-      
-      // Find matches with flexible whitespace
-      const matches = [...highlightedContent.matchAll(regex)];
-      
-      if (matches.length > 0) {
-        // Replace matches with highlighted versions (in reverse order to maintain indices)
-        matches.reverse().forEach(match => {
-          const start = match.index;
-          const end = start + match[0].length;
-          const highlightId = `highlight-${index}-${start}`;
-          
-          highlightedContent = 
-            highlightedContent.slice(0, start) +
-            `<mark class="citation-highlight" data-citation-id="${index}" id="${highlightId}">${match[0]}</mark>` +
-            highlightedContent.slice(end);
-        });
-      } else {
-        // Fallback: Try with more flexible approach
-        const words = cleanSearchText.split(/\s+/).filter(word => word.length > 2);
-        
-        if (words.length > 1) {
-          // For multi-word phrases, create a pattern that allows for varying whitespace
-          const pattern = words.map(word => escapeRegExp(word)).join('\\s+');
-          const multiWordRegex = new RegExp(`\\b${pattern}\\b`, 'gi');
-          
-          highlightedContent = highlightedContent.replace(multiWordRegex, (match) => {
-            return `<mark class="citation-highlight" data-citation-id="${index}">${match}</mark>`;
-          });
-        } else {
-          // Single word highlighting
-          words.forEach(word => {
-            const wordRegex = new RegExp(`\\b${escapeRegExp(word)}\\b`, 'gi');
-            highlightedContent = highlightedContent.replace(wordRegex, 
-              `<mark class="citation-highlight-word" data-citation-id="${index}">$&</mark>`
-            );
-          });
-        }
-      }
-    });
-
-    setHighlightedText(highlightedContent);
-  };</mark>`
+              `<mark class="citation-highlight-word" data-citation-id="${index}"></mark>`
             );
           }
         });
