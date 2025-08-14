@@ -128,22 +128,26 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
         const top = viewport.height - tx[5] - fontAscent;
         const fontSize = fontHeight;
         
-        // Apply styles for proper positioning
+        // Apply styles for proper positioning and selectability
         Object.assign(textElement.style, {
           position: 'absolute',
           left: left + 'px',
           top: top + 'px',
           fontSize: fontSize + 'px',
           fontFamily: textItem.fontName || 'sans-serif',
-          color: 'transparent',
+          // Make text selectable with very low opacity instead of transparent
+          color: 'rgba(0, 0, 0, 0.01)',
           userSelect: 'text',
           cursor: 'text',
           whiteSpace: 'pre',
           transformOrigin: '0 0',
-          // Make text selectable but invisible unless highlighted
+          // Enhanced selectability
           WebkitUserSelect: 'text',
           MozUserSelect: 'text',
-          msUserSelect: 'text'
+          msUserSelect: 'text',
+          // Ensure text is above canvas but below highlights
+          zIndex: '10',
+          pointerEvents: 'auto'
         });
 
         textLayerRef.current.appendChild(textElement);
@@ -162,11 +166,12 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
       el.classList.remove("citation-highlight");
       Object.assign(el.style, {
         backgroundColor: '',
-        color: 'transparent',
+        // Reset to low opacity instead of transparent for selectability
+        color: 'rgba(0, 0, 0, 0.01)',
         padding: '',
         borderRadius: '',
         boxShadow: '',
-        zIndex: ''
+        zIndex: '10'
       });
     });
   };
@@ -244,14 +249,42 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
     element.classList.add("citation-highlight");
     Object.assign(element.style, {
       backgroundColor: '#ffeb3b',
-      color: '#000000',
+      color: '#000000', // Full opacity for highlighted text
       padding: '2px 4px',
       borderRadius: '3px',
       boxShadow: '0 1px 3px rgba(255, 235, 59, 0.5)',
-      zIndex: '100',
+      zIndex: '100', // Higher z-index for highlighted text
       position: 'relative'
     });
   };
+
+  // Add function to copy selected text
+  const copySelectedText = () => {
+    const selection = window.getSelection();
+    if (selection.rangeCount > 0) {
+      const selectedText = selection.toString();
+      if (selectedText) {
+        navigator.clipboard.writeText(selectedText).then(() => {
+          console.log('Text copied to clipboard');
+          // You can add a toast notification here if needed
+        }).catch(err => {
+          console.error('Failed to copy text: ', err);
+        });
+      }
+    }
+  };
+
+  // Add keyboard shortcut for copying
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'c') {
+        copySelectedText();
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   const scrollToCitation = (citation) => {
     // Navigate to the page of the citation
@@ -276,6 +309,7 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
   // Expose methods to parent component
   useImperativeHandle(ref, () => ({
     scrollToCitation,
+    copySelectedText,
   }));
 
   const handlePrevPage = () => {
@@ -339,6 +373,14 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
 
         <div className="flex items-center space-x-2">
           <button
+            onClick={copySelectedText}
+            className="p-2 rounded hover:bg-gray-200 text-sm text-gray-600"
+            title="Copy selected text (Ctrl+C)"
+          >
+            Copy Text
+          </button>
+          
+          <button
             onClick={handleZoomOut}
             disabled={scale <= 0.5}
             className="p-2 rounded hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -384,6 +426,9 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
                   style={{ 
                     pointerEvents: 'auto',
                     userSelect: 'text',
+                    WebkitUserSelect: 'text',
+                    MozUserSelect: 'text',
+                    msUserSelect: 'text'
                   }}
                 />
                 
@@ -407,15 +452,21 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
         .text-layer {
           font-size: 1px;
           line-height: 1;
+          user-select: text;
         }
         
         .text-layer-item {
           position: absolute;
-          color: transparent;
-          user-select: text;
+          color: rgba(0, 0, 0, 0.01);
+          user-select: text !important;
+          -webkit-user-select: text !important;
+          -moz-user-select: text !important;
+          -ms-user-select: text !important;
           cursor: text;
           white-space: pre;
           transform-origin: 0 0;
+          z-index: 10;
+          pointer-events: auto;
         }
         
         .citation-highlight {
@@ -434,7 +485,21 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
         }
         
         .text-layer-item::selection {
-          background-color: rgba(0, 123, 255, 0.3);
+          background-color: rgba(0, 123, 255, 0.3) !important;
+          color: #000000 !important;
+        }
+        
+        .citation-highlight::selection {
+          background-color: rgba(0, 123, 255, 0.5) !important;
+          color: #000000 !important;
+        }
+        
+        /* Ensure text selection works properly */
+        .text-layer * {
+          user-select: text !important;
+          -webkit-user-select: text !important;
+          -moz-user-select: text !important;
+          -ms-user-select: text !important;
         }
       `}</style>
     </div>
