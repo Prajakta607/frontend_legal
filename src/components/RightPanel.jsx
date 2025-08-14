@@ -107,16 +107,16 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
       const textContent = await page.getTextContent();
       setPageTextContent(textContent);
 
-      // Clear existing text layer
+      // Clear existing layers
       textLayerRef.current.innerHTML = "";
       textLayerRef.current.style.width = viewport.width + "px";
       textLayerRef.current.style.height = viewport.height + "px";
 
-      // Create text layer elements
+      // Create invisible text selection layer
       textContent.items.forEach((textItem, index) => {
-        const textElement = document.createElement("span");
+        const textElement = document.createElement("div");
         textElement.textContent = textItem.str;
-        textElement.className = "text-layer-item";
+        textElement.className = "text-selection-item";
         textElement.dataset.textIndex = index;
         
         // Calculate position and size
@@ -127,23 +127,31 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
         const left = tx[4];
         const top = viewport.height - tx[5] - fontAscent;
         const fontSize = fontHeight;
+        const width = textItem.width || fontSize * textItem.str.length * 0.6;
+        const height = fontHeight;
         
-        // Apply styles for proper positioning
+        // Apply styles - invisible but selectable overlay
         Object.assign(textElement.style, {
           position: 'absolute',
           left: left + 'px',
           top: top + 'px',
+          width: width + 'px',
+          height: height + 'px',
           fontSize: fontSize + 'px',
           fontFamily: textItem.fontName || 'sans-serif',
           color: 'transparent',
+          backgroundColor: 'transparent',
           userSelect: 'text',
           cursor: 'text',
           whiteSpace: 'pre',
           transformOrigin: '0 0',
-          // Make text selectable but invisible unless highlighted
-          WebkitUserSelect: 'text',
-          MozUserSelect: 'text',
-          msUserSelect: 'text'
+          overflow: 'hidden',
+          // Store original text data for highlighting
+          '--text-content': `"${textItem.str}"`,
+          '--left': left + 'px',
+          '--top': top + 'px',
+          '--width': width + 'px',
+          '--height': height + 'px'
         });
 
         textLayerRef.current.appendChild(textElement);
@@ -157,18 +165,9 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
   const clearHighlights = () => {
     if (!textLayerRef.current) return;
     
-    const highlightedElements = textLayerRef.current.querySelectorAll(".citation-highlight");
-    highlightedElements.forEach(el => {
-      el.classList.remove("citation-highlight");
-      Object.assign(el.style, {
-        backgroundColor: '',
-        color: 'transparent',
-        padding: '',
-        borderRadius: '',
-        boxShadow: '',
-        zIndex: ''
-      });
-    });
+    // Remove all highlight overlays
+    const highlights = textLayerRef.current.querySelectorAll(".highlight-overlay");
+    highlights.forEach(highlight => highlight.remove());
   };
 
   const applyHighlights = () => {
@@ -190,7 +189,7 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
     const searchText = citation.quote || citation.content_preview;
     if (!searchText || searchText.length < 3) return;
 
-    const textElements = textLayerRef.current.querySelectorAll('.text-layer-item');
+    const textElements = textLayerRef.current.querySelectorAll('.text-selection-item');
     const fullPageText = Array.from(textElements).map(el => el.textContent).join(' ');
     
     // Clean and normalize text for better matching
@@ -211,6 +210,7 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
 
   const highlightExactMatch = (textElements, startIndex, searchLength) => {
     let currentIndex = 0;
+    const elementsToHighlight = [];
     
     textElements.forEach(element => {
       const textLength = element.textContent.length;
@@ -219,10 +219,15 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
       
       // Check if this element overlaps with our search text
       if (elementStart < startIndex + searchLength && elementEnd > startIndex) {
-        highlightElement(element);
+        elementsToHighlight.push(element);
       }
       
       currentIndex = elementEnd + 1; // +1 for space between elements
+    });
+
+    // Create highlight overlays for matched elements
+    elementsToHighlight.forEach(element => {
+      createHighlightOverlay(element);
     });
   };
 
@@ -235,22 +240,35 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
       
       // Highlight if element contains significant words from the search text
       if (matchingWords.length > 0 && matchingWords.length / words.length > 0.3) {
-        highlightElement(element);
+        createHighlightOverlay(element);
       }
     });
   };
 
-  const highlightElement = (element) => {
-    element.classList.add("citation-highlight");
-    Object.assign(element.style, {
-      backgroundColor: '#ffeb3b',
-      color: '#000000',
-      padding: '2px 4px',
-      borderRadius: '3px',
-      boxShadow: '0 1px 3px rgba(255, 235, 59, 0.5)',
-      zIndex: '100',
-      position: 'relative'
+  const createHighlightOverlay = (textElement) => {
+    // Create a highlight overlay div positioned exactly over the original PDF text
+    const highlight = document.createElement("div");
+    highlight.className = "highlight-overlay";
+    
+    // Get the position and size from the text element
+    const rect = textElement.getBoundingClientRect();
+    const containerRect = textLayerRef.current.getBoundingClientRect();
+    
+    Object.assign(highlight.style, {
+      position: 'absolute',
+      left: textElement.style.left,
+      top: textElement.style.top,
+      width: textElement.style.width,
+      height: textElement.style.height,
+      backgroundColor: 'rgba(255, 235, 59, 0.4)', // Semi-transparent yellow
+      borderRadius: '2px',
+      pointerEvents: 'none',
+      zIndex: '50',
+      mixBlendMode: 'multiply', // Blend with underlying PDF content
+      border: '1px solid rgba(255, 235, 59, 0.8)'
     });
+    
+    textLayerRef.current.appendChild(highlight);
   };
 
   const scrollToCitation = (citation) => {
@@ -402,39 +420,39 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
         )}
       </div>
 
-      {/* Enhanced CSS for text layer and highlights */}
+      {/* Enhanced CSS for text selection and highlight overlays */}
       <style jsx>{`
         .text-layer {
-          font-size: 1px;
-          line-height: 1;
+          pointer-events: auto;
+          user-select: text;
         }
         
-        .text-layer-item {
+        .text-selection-item {
           position: absolute;
           color: transparent;
           user-select: text;
           cursor: text;
           white-space: pre;
           transform-origin: 0 0;
+          background-color: transparent;
         }
         
-        .citation-highlight {
-          background-color: #ffeb3b !important;
-          color: #000000 !important;
-          padding: 2px 4px !important;
-          border-radius: 3px !important;
-          box-shadow: 0 1px 3px rgba(255, 235, 59, 0.5) !important;
-          z-index: 100 !important;
-          position: relative !important;
-        }
-        
-        .citation-highlight:hover {
-          background-color: #ffc107 !important;
-          box-shadow: 0 2px 6px rgba(255, 193, 7, 0.6) !important;
-        }
-        
-        .text-layer-item::selection {
+        .text-selection-item::selection {
           background-color: rgba(0, 123, 255, 0.3);
+        }
+        
+        .highlight-overlay {
+          position: absolute;
+          background-color: rgba(255, 235, 59, 0.4) !important;
+          border-radius: 2px !important;
+          pointer-events: none !important;
+          z-index: 50 !important;
+          mix-blend-mode: multiply !important;
+          border: 1px solid rgba(255, 235, 59, 0.8) !important;
+        }
+        
+        .highlight-overlay:hover {
+          background-color: rgba(255, 193, 7, 0.5) !important;
         }
       `}</style>
     </div>
