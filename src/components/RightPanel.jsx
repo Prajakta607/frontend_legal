@@ -19,7 +19,6 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
   const canvasRef = useRef();
   const containerRef = useRef();
   const textLayerRef = useRef();
-  const highlightLayerRef = useRef();
 
   // Load PDF when file changes
   useEffect(() => {
@@ -80,22 +79,34 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
       canvas.height = viewport.height;
       canvas.width = viewport.width;
 
-      // Clear previous content
+      // Clear canvas
       context.clearRect(0, 0, canvas.width, canvas.height);
 
-      // Render PDF page with reduced text visibility
+      // Create a white background
+      context.fillStyle = '#ffffff';
+      context.fillRect(0, 0, canvas.width, canvas.height);
+
+      // Render only graphics/images by using a custom render context
+      // that skips text operations
+      const originalFillText = context.fillText;
+      const originalStrokeText = context.strokeText;
+      
+      // Temporarily disable text rendering on canvas
+      context.fillText = () => {};
+      context.strokeText = () => {};
+
       const renderContext = {
         canvasContext: context,
         viewport: viewport
       };
-      
-      await page.render(renderContext).promise;
-      
-      // Apply CSS filter to make canvas text less visible
-      canvas.style.filter = 'contrast(0.3) brightness(1.5)';
-      canvas.style.opacity = '0.7';
 
-      // Render actual selectable text layer
+      await page.render(renderContext).promise;
+
+      // Restore text methods
+      context.fillText = originalFillText;
+      context.strokeText = originalStrokeText;
+
+      // Render our custom text layer
       await renderTextLayer(page, viewport);
       
     } catch (err) {
@@ -113,63 +124,60 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
       const textContent = await page.getTextContent();
       setPageTextContent(textContent);
 
-      // Clear existing layers
+      // Clear existing text layer
       textLayerRef.current.innerHTML = "";
-      if (highlightLayerRef.current) {
-        highlightLayerRef.current.innerHTML = "";
-      }
-
-      // Set container dimensions
       textLayerRef.current.style.width = viewport.width + "px";
       textLayerRef.current.style.height = viewport.height + "px";
 
-      // Use PDF.js TextLayerBuilder approach for accurate text positioning
-      const textLayerDiv = textLayerRef.current;
-      
-      // Clear and prepare the text layer
-      textLayerDiv.innerHTML = '';
-      
-      // Create text elements with exact PDF positioning
+      // Create text elements
       textContent.items.forEach((textItem, index) => {
+        if (!textItem.str.trim()) return; // Skip empty text
+
         const textElement = document.createElement('span');
         textElement.textContent = textItem.str;
         textElement.dataset.textIndex = index;
         
-        // Extract positioning from PDF transform matrix
-        const [a, b, c, d, e, f] = textItem.transform;
+        // Get transform matrix values
+        const transform = textItem.transform;
+        const [scaleX, skewX, skewY, scaleY, translateX, translateY] = transform;
         
-        // Calculate font size and position
-        const fontSize = Math.abs(d);
-        const x = e;
-        const y = viewport.height - f;
+        // Calculate font size from the transform matrix
+        const fontSize = Math.abs(scaleY);
         
-        // Apply positioning and styling
-        textElement.style.position = 'absolute';
-        textElement.style.left = x + 'px';
-        textElement.style.top = (y - fontSize) + 'px';
-        textElement.style.fontSize = fontSize + 'px';
-        textElement.style.fontFamily = textItem.fontName || 'sans-serif';
-        textElement.style.color = '#000000';
-        textElement.style.whiteSpace = 'pre';
-        textElement.style.transformOrigin = '0 0';
-        
-        // Handle text rotation/skewing if present
-        if (a !== fontSize || b !== 0 || c !== 0) {
-          const scaleX = a / fontSize;
-          const skewY = -c / fontSize;
-          const skewX = b / fontSize;
-          const scaleY = -d / fontSize;
-          textElement.style.transform = `matrix(${scaleX}, ${skewX}, ${skewY}, ${scaleY}, 0, 0)`;
+        // Position the text element
+        textElement.style.cssText = `
+          position: absolute;
+          left: ${translateX}px;
+          top: ${viewport.height - translateY - fontSize}px;
+          font-size: ${fontSize}px;
+          font-family: ${textItem.fontName || 'Arial, sans-serif'};
+          color: #000000;
+          white-space: pre;
+          user-select: text;
+          cursor: text;
+          pointer-events: auto;
+          transform-origin: left top;
+          line-height: 1;
+          margin: 0;
+          padding: 0;
+          z-index: 10;
+        `;
+
+        // Apply transformation for rotated/skewed text
+        if (Math.abs(scaleX - fontSize) > 0.1 || Math.abs(skewX) > 0.1 || Math.abs(skewY) > 0.1) {
+          const normalizedMatrix = [
+            scaleX / fontSize,
+            skewX / fontSize, 
+            -skewY / fontSize,
+            -scaleY / fontSize,
+            0,
+            0
+          ];
+          textElement.style.transform = `matrix(${normalizedMatrix.join(',')})`;
         }
-        
-        // Make text selectable
-        textElement.style.userSelect = 'text';
-        textElement.style.cursor = 'text';
-        textElement.style.pointerEvents = 'auto';
-        textElement.style.zIndex = '10';
-        
+
         textElement.className = 'pdf-text-item';
-        textLayerDiv.appendChild(textElement);
+        textLayerRef.current.appendChild(textElement);
       });
 
     } catch (err) {
@@ -188,6 +196,7 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
       el.style.borderRadius = '';
       el.style.padding = '';
       el.style.margin = '';
+      el.style.border = '';
     });
   };
 
@@ -212,18 +221,16 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
 
     const textElements = Array.from(textLayerRef.current.querySelectorAll('.pdf-text-item'));
     
-    // Clean and normalize search text
+    // Clean search text
     const cleanSearchText = searchText.replace(/\s+/g, ' ').trim().toLowerCase();
     
-    // Build full text from elements
+    // Build full text and find matches
     const fullText = textElements.map(el => el.textContent).join(' ').toLowerCase();
     const searchIndex = fullText.indexOf(cleanSearchText);
     
     if (searchIndex !== -1) {
-      // Exact match found
       highlightExactMatch(textElements, cleanSearchText, fullText, searchIndex);
     } else {
-      // Try word-based matching
       highlightWordBasedMatch(textElements, cleanSearchText);
     }
   };
@@ -237,12 +244,11 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
       const elementStart = currentPosition;
       const elementEnd = currentPosition + elementText.length;
       
-      // Check if this element intersects with the search text
       if (elementStart < searchEndIndex && elementEnd > searchStartIndex) {
         highlightElement(element);
       }
       
-      currentPosition = elementEnd + 1; // +1 for space
+      currentPosition = elementEnd + 1;
     });
   };
 
@@ -255,7 +261,6 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
         elementText.includes(word) || word.includes(elementText.trim())
       ).length;
       
-      // Highlight if significant portion of search words match
       if (matchCount > 0 && (matchCount / searchWords.length) >= 0.3) {
         highlightElement(element);
       }
@@ -264,11 +269,12 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
 
   const highlightElement = (element) => {
     element.classList.add('citation-highlight');
-    element.style.backgroundColor = 'rgba(255, 235, 59, 0.7)';
-    element.style.boxShadow = '0 0 0 2px rgba(255, 193, 7, 0.4)';
+    element.style.backgroundColor = '#FFEB3B';
+    element.style.boxShadow = '0 0 0 2px rgba(255, 193, 7, 0.5)';
     element.style.borderRadius = '2px';
     element.style.padding = '1px 2px';
     element.style.margin = '-1px -2px';
+    element.style.border = '1px solid #FFC107';
   };
 
   const copySelectedText = () => {
@@ -424,7 +430,7 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
           <button
             onClick={handleNextPage}
             disabled={currentPage >= totalPages || loading}
-            className="p-2 rounded hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="p-2 rounded hover:bg-gray-200 disabled:cursor-not-allowed"
             title="Next page"
           >
             <ChevronRightIcon className="w-5 h-5" />
@@ -479,19 +485,13 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
           <div className="min-h-full py-4">
             <div ref={containerRef} className="flex justify-center">
               <div className="relative shadow-lg bg-white">
-                {/* PDF Canvas (without text) */}
+                {/* PDF Canvas - Graphics/Images only */}
                 <canvas ref={canvasRef} className="block max-w-full" />
                 
-                {/* Actual PDF Text Layer */}
+                {/* Clean Text Layer */}
                 <div
                   ref={textLayerRef}
                   className="absolute top-0 left-0 pdf-text-layer"
-                />
-                
-                {/* Highlight Layer */}
-                <div
-                  ref={highlightLayerRef}
-                  className="absolute top-0 left-0 highlight-layer pointer-events-none"
                 />
                 
                 {loading && (
@@ -508,7 +508,7 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
         )}
       </div>
 
-      {/* Styles for actual PDF text highlighting */}
+      {/* Styles */}
       <style jsx>{`
         .pdf-text-layer {
           user-select: text;
@@ -516,41 +516,31 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
         }
         
         .pdf-text-item {
-          position: absolute;
-          color: #000000;
-          white-space: pre;
-          cursor: text;
           user-select: text !important;
           -webkit-user-select: text !important;
           -moz-user-select: text !important;
           -ms-user-select: text !important;
-          pointer-events: auto;
         }
         
         .pdf-text-item.citation-highlight {
-          background-color: rgba(255, 235, 59, 0.7) !important;
-          box-shadow: 0 0 0 2px rgba(255, 193, 7, 0.4) !important;
+          background-color: #FFEB3B !important;
+          box-shadow: 0 0 0 2px rgba(255, 193, 7, 0.5) !important;
           border-radius: 2px !important;
           padding: 1px 2px !important;
           margin: -1px -2px !important;
+          border: 1px solid #FFC107 !important;
         }
         
         .pdf-text-item.citation-highlight:hover {
-          background-color: rgba(255, 193, 7, 0.8) !important;
-          box-shadow: 0 0 0 2px rgba(255, 152, 0, 0.6) !important;
+          background-color: #FFC107 !important;
         }
         
         .pdf-text-item::selection {
-          background-color: rgba(0, 123, 255, 0.3);
+          background-color: rgba(0, 123, 255, 0.3) !important;
         }
         
         .citation-highlight::selection {
-          background-color: rgba(0, 123, 255, 0.5);
-        }
-        
-        .highlight-layer {
-          pointer-events: none;
-          z-index: 1;
+          background-color: rgba(0, 123, 255, 0.5) !important;
         }
       `}</style>
     </div>
