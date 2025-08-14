@@ -81,16 +81,18 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
       canvas.width = viewport.width;
 
       // Clear previous content
-      context.clearRect(0, 0, canvas.width, canvas.width);
+      context.clearRect(0, 0, canvas.width, canvas.height);
 
       // Render PDF page WITHOUT text (text will be rendered separately)
       const renderContext = {
         canvasContext: context,
         viewport: viewport,
-        // Disable text rendering on canvas so we can handle it separately
-        renderTextLayer: false
+        // Disable text rendering completely on canvas
+        intent: 'display'
       };
-      await page.render(renderContext).promise;
+      
+      const renderTask = page.render(renderContext);
+      await renderTask.promise;
 
       // Render actual selectable text layer
       await renderTextLayer(page, viewport);
@@ -120,46 +122,44 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
       textLayerRef.current.style.width = viewport.width + "px";
       textLayerRef.current.style.height = viewport.height + "px";
 
-      // Use PDF.js TextLayerBuilder for proper text rendering
+      // Use PDF.js TextLayerBuilder approach for accurate text positioning
       const textLayerDiv = textLayerRef.current;
       
       // Clear and prepare the text layer
       textLayerDiv.innerHTML = '';
-      textLayerDiv.style.setProperty('--scale-factor', scale);
       
-      // Create text layer elements with proper PDF.js positioning
+      // Create text layer elements with PDF.js standard positioning
       textContent.items.forEach((textItem, index) => {
         const textElement = document.createElement('span');
         textElement.textContent = textItem.str;
-        textElement.style.setProperty('--text-index', index);
         textElement.dataset.textIndex = index;
         
-        // Get transformation matrix
-        const tx = textItem.transform;
-        const fontHeight = Math.sqrt(tx[2] * tx[2] + tx[3] * tx[3]);
-        const fontWidth = Math.sqrt(tx[0] * tx[0] + tx[1] * tx[1]);
+        // Get transformation matrix from PDF.js
+        const transform = textItem.transform;
+        const [scaleX, skewX, skewY, scaleY, translateX, translateY] = transform;
         
-        // Calculate positioning
-        const left = tx[4];
-        const top = viewport.height - tx[5];
-        const fontSize = fontHeight;
+        // Calculate proper positioning
+        const fontSize = Math.sqrt(scaleY * scaleY + skewY * skewY);
+        const fontWidth = Math.sqrt(scaleX * scaleX + skewX * skewX);
         
-        // Apply PDF.js standard text layer styles
+        // Position text element
         textElement.style.position = 'absolute';
-        textElement.style.whiteSpace = 'pre';
-        textElement.style.color = '#000';
+        textElement.style.left = translateX + 'px';
+        textElement.style.top = (viewport.height - translateY - fontSize) + 'px';
         textElement.style.fontSize = fontSize + 'px';
         textElement.style.fontFamily = textItem.fontName || 'sans-serif';
-        textElement.style.left = left + 'px';
-        textElement.style.top = (top - fontSize) + 'px';
+        textElement.style.color = '#000';
+        textElement.style.whiteSpace = 'pre';
+        textElement.style.transformOrigin = '0% 0%';
         
-        // Set transform for proper text orientation
-        if (tx[0] !== fontWidth || tx[1] !== 0 || tx[2] !== 0 || tx[3] !== -fontHeight) {
-          const scaleX = tx[0] / fontWidth;
-          const scaleY = -tx[3] / fontHeight;
-          const skewX = tx[1] / fontWidth;
-          const skewY = -tx[2] / fontHeight;
-          textElement.style.transform = `matrix(${scaleX}, ${-skewX}, ${skewY}, ${scaleY}, 0, 0)`;
+        // Apply transformation if needed (for rotated or skewed text)
+        if (scaleX !== fontWidth || skewX !== 0 || skewY !== 0 || scaleY !== -fontSize) {
+          const normalizedScaleX = scaleX / fontWidth;
+          const normalizedSkewX = skewX / fontWidth;
+          const normalizedSkewY = -skewY / fontSize;
+          const normalizedScaleY = -scaleY / fontSize;
+          
+          textElement.style.transform = `matrix(${normalizedScaleX}, ${-normalizedSkewX}, ${normalizedSkewY}, ${normalizedScaleY}, 0, 0)`;
         }
         
         // Make text selectable
