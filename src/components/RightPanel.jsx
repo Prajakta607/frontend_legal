@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, forwardRef, useImperativeHandle } from "react";
 import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf";
-import { ChevronLeftIcon, ChevronRightIcon, MagnifyingGlassMinusIcon, MagnifyingGlassPlusIcon } from "@heroicons/react/24/outline";
+import { ChevronLeftIcon, ChevronRightIcon, DocumentTextIcon } from "@heroicons/react/24/outline";
 
 // Set up PDF.js worker
 pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -10,15 +10,13 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
   const [pdf, setPdf] = useState(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [totalPages, setTotalPages] = useState(0);
-  const [scale, setScale] = useState(1.2);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [pageTextContent, setPageTextContent] = useState(null);
-  const [highlightedCitation, setHighlightedCitation] = useState(null);
+  const [pageText, setPageText] = useState('');
+  const [highlightedText, setHighlightedText] = useState('');
 
-  const canvasRef = useRef();
   const containerRef = useRef();
-  const textLayerRef = useRef();
+  const textContainerRef = useRef();
 
   // Load PDF when file changes
   useEffect(() => {
@@ -29,24 +27,23 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
       setCurrentPage(1);
       setTotalPages(0);
       setError(null);
+      setPageText('');
     }
   }, [pdfFile]);
 
-  // Render page when PDF, currentPage, or scale changes
+  // Extract text when PDF or page changes
   useEffect(() => {
-    if (pdf) {
-      renderPage(currentPage);
+    if (pdf && currentPage) {
+      extractPageText(currentPage);
     }
-  }, [pdf, currentPage, scale]);
+  }, [pdf, currentPage]);
 
-  // Apply highlights when citations change or page changes
+  // Apply highlights when citations or page text changes
   useEffect(() => {
-    if (pageTextContent) {
-      setTimeout(() => {
-        applyHighlights();
-      }, 100);
+    if (pageText) {
+      applyHighlights();
     }
-  }, [citedPagesMetadata, currentPage, pageTextContent]);
+  }, [citedPagesMetadata, currentPage, pageText]);
 
   const loadPDF = async (file) => {
     setLoading(true);
@@ -66,215 +63,111 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
     }
   };
 
-  const renderPage = async (pageNum) => {
-    if (!pdf || !canvasRef.current) return;
+  const extractPageText = async (pageNum) => {
+    if (!pdf) return;
 
     setLoading(true);
     try {
       const page = await pdf.getPage(pageNum);
-      const viewport = page.getViewport({ scale });
-
-      const canvas = canvasRef.current;
-      const context = canvas.getContext("2d");
-      canvas.height = viewport.height;
-      canvas.width = viewport.width;
-
-      // Clear canvas
-      context.clearRect(0, 0, canvas.width, canvas.height);
-
-      // Create a white background
-      context.fillStyle = '#ffffff';
-      context.fillRect(0, 0, canvas.width, canvas.height);
-
-      // Render only graphics/images by using a custom render context
-      // that skips text operations
-      const originalFillText = context.fillText;
-      const originalStrokeText = context.strokeText;
+      const textContent = await page.getTextContent();
       
-      // Temporarily disable text rendering on canvas
-      context.fillText = () => {};
-      context.strokeText = () => {};
+      // Extract text with proper spacing
+      let extractedText = '';
+      let lastY = null;
+      
+      textContent.items.forEach((item, index) => {
+        const currentY = item.transform[5];
+        
+        // Add line breaks for significant vertical position changes
+        if (lastY !== null && Math.abs(lastY - currentY) > 5) {
+          extractedText += '\n';
+        }
+        
+        // Add the text
+        extractedText += item.str;
+        
+        // Add space if next item is far horizontally or this item doesn't end with space
+        const nextItem = textContent.items[index + 1];
+        if (nextItem) {
+          const currentX = item.transform[4] + (item.width || 0);
+          const nextX = nextItem.transform[4];
+          const sameY = Math.abs(currentY - nextItem.transform[5]) < 2;
+          
+          if (sameY && nextX - currentX > 5) {
+            extractedText += ' ';
+          }
+        }
+        
+        lastY = currentY;
+      });
 
-      const renderContext = {
-        canvasContext: context,
-        viewport: viewport
-      };
-
-      await page.render(renderContext).promise;
-
-      // Restore text methods
-      context.fillText = originalFillText;
-      context.strokeText = originalStrokeText;
-
-      // Render our custom text layer
-      await renderTextLayer(page, viewport);
+      setPageText(extractedText.trim());
       
     } catch (err) {
-      console.error("Error rendering page:", err);
-      setError("Failed to render page");
+      console.error("Error extracting text:", err);
+      setError("Failed to extract text from page");
     } finally {
       setLoading(false);
     }
   };
 
-  const renderTextLayer = async (page, viewport) => {
-    if (!textLayerRef.current) return;
-
-    try {
-      const textContent = await page.getTextContent();
-      setPageTextContent(textContent);
-
-      // Clear existing text layer
-      textLayerRef.current.innerHTML = "";
-      textLayerRef.current.style.width = viewport.width + "px";
-      textLayerRef.current.style.height = viewport.height + "px";
-
-      // Create text elements
-      textContent.items.forEach((textItem, index) => {
-        if (!textItem.str.trim()) return; // Skip empty text
-
-        const textElement = document.createElement('span');
-        textElement.textContent = textItem.str;
-        textElement.dataset.textIndex = index;
-        
-        // Get transform matrix values
-        const transform = textItem.transform;
-        const [scaleX, skewX, skewY, scaleY, translateX, translateY] = transform;
-        
-        // Calculate font size from the transform matrix
-        const fontSize = Math.abs(scaleY);
-        
-        // Position the text element
-        textElement.style.cssText = `
-          position: absolute;
-          left: ${translateX}px;
-          top: ${viewport.height - translateY - fontSize}px;
-          font-size: ${fontSize}px;
-          font-family: ${textItem.fontName || 'Arial, sans-serif'};
-          color: #000000;
-          white-space: pre;
-          user-select: text;
-          cursor: text;
-          pointer-events: auto;
-          transform-origin: left top;
-          line-height: 1;
-          margin: 0;
-          padding: 0;
-          z-index: 10;
-        `;
-
-        // Apply transformation for rotated/skewed text
-        if (Math.abs(scaleX - fontSize) > 0.1 || Math.abs(skewX) > 0.1 || Math.abs(skewY) > 0.1) {
-          const normalizedMatrix = [
-            scaleX / fontSize,
-            skewX / fontSize, 
-            -skewY / fontSize,
-            -scaleY / fontSize,
-            0,
-            0
-          ];
-          textElement.style.transform = `matrix(${normalizedMatrix.join(',')})`;
-        }
-
-        textElement.className = 'pdf-text-item';
-        textLayerRef.current.appendChild(textElement);
-      });
-
-    } catch (err) {
-      console.error("Error rendering text layer:", err);
-    }
-  };
-
-  const clearHighlights = () => {
-    if (!textLayerRef.current) return;
-    
-    const textElements = textLayerRef.current.querySelectorAll('.pdf-text-item');
-    textElements.forEach(el => {
-      el.classList.remove('citation-highlight');
-      el.style.backgroundColor = '';
-      el.style.boxShadow = '';
-      el.style.borderRadius = '';
-      el.style.padding = '';
-      el.style.margin = '';
-      el.style.border = '';
-    });
-  };
-
   const applyHighlights = () => {
-    if (!pageTextContent || !textLayerRef.current) return;
-
-    clearHighlights();
+    if (!pageText) {
+      setHighlightedText('');
+      return;
+    }
 
     // Get citations for current page
     const currentPageCitations = citedPagesMetadata.filter(citation => citation.page === currentPage);
     
-    currentPageCitations.forEach(citation => {
-      highlightTextInPage(citation);
-    });
-  };
-
-  const highlightTextInPage = (citation) => {
-    if (!pageTextContent || !textLayerRef.current) return;
-
-    const searchText = citation.quote || citation.content_preview;
-    if (!searchText || searchText.length < 3) return;
-
-    const textElements = Array.from(textLayerRef.current.querySelectorAll('.pdf-text-item'));
-    
-    // Clean search text
-    const cleanSearchText = searchText.replace(/\s+/g, ' ').trim().toLowerCase();
-    
-    // Build full text and find matches
-    const fullText = textElements.map(el => el.textContent).join(' ').toLowerCase();
-    const searchIndex = fullText.indexOf(cleanSearchText);
-    
-    if (searchIndex !== -1) {
-      highlightExactMatch(textElements, cleanSearchText, fullText, searchIndex);
-    } else {
-      highlightWordBasedMatch(textElements, cleanSearchText);
+    if (currentPageCitations.length === 0) {
+      setHighlightedText(pageText);
+      return;
     }
-  };
 
-  const highlightExactMatch = (textElements, searchText, fullText, searchStartIndex) => {
-    const searchEndIndex = searchStartIndex + searchText.length;
-    let currentPosition = 0;
+    let highlightedContent = pageText;
     
-    textElements.forEach((element) => {
-      const elementText = element.textContent;
-      const elementStart = currentPosition;
-      const elementEnd = currentPosition + elementText.length;
+    // Apply highlights for each citation
+    currentPageCitations.forEach((citation, index) => {
+      const searchText = citation.quote || citation.content_preview;
+      if (!searchText || searchText.length < 3) return;
+
+      // Clean and normalize search text
+      const cleanSearchText = searchText.replace(/\s+/g, ' ').trim();
       
-      if (elementStart < searchEndIndex && elementEnd > searchStartIndex) {
-        highlightElement(element);
+      // Find exact matches first
+      const regex = new RegExp(escapeRegExp(cleanSearchText), 'gi');
+      const matches = [...highlightedContent.matchAll(regex)];
+      
+      if (matches.length > 0) {
+        // Replace matches with highlighted versions
+        matches.reverse().forEach(match => {
+          const start = match.index;
+          const end = start + match[0].length;
+          const highlightId = `highlight-${index}-${start}`;
+          
+          highlightedContent = 
+            highlightedContent.slice(0, start) +
+            `<mark class="citation-highlight" data-citation-id="${index}" id="${highlightId}">${match[0]}</mark>` +
+            highlightedContent.slice(end);
+        });
+      } else {
+        // Fallback: highlight individual words if exact match not found
+        const words = cleanSearchText.split(/\s+/).filter(word => word.length > 3);
+        words.forEach(word => {
+          const wordRegex = new RegExp(`\\b${escapeRegExp(word)}\\b`, 'gi');
+          highlightedContent = highlightedContent.replace(wordRegex, 
+            `<mark class="citation-highlight-word" data-citation-id="${index}">$&</mark>`
+          );
+        });
       }
-      
-      currentPosition = elementEnd + 1;
     });
+
+    setHighlightedText(highlightedContent);
   };
 
-  const highlightWordBasedMatch = (textElements, searchText) => {
-    const searchWords = searchText.split(/\s+/).filter(word => word.length > 2);
-    
-    textElements.forEach((element) => {
-      const elementText = element.textContent.toLowerCase();
-      const matchCount = searchWords.filter(word => 
-        elementText.includes(word) || word.includes(elementText.trim())
-      ).length;
-      
-      if (matchCount > 0 && (matchCount / searchWords.length) >= 0.3) {
-        highlightElement(element);
-      }
-    });
-  };
-
-  const highlightElement = (element) => {
-    element.classList.add('citation-highlight');
-    element.style.backgroundColor = '#FFEB3B';
-    element.style.boxShadow = '0 0 0 2px rgba(255, 193, 7, 0.5)';
-    element.style.borderRadius = '2px';
-    element.style.padding = '1px 2px';
-    element.style.margin = '-1px -2px';
-    element.style.border = '1px solid #FFC107';
+  const escapeRegExp = (string) => {
+    return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   };
 
   const copySelectedText = () => {
@@ -292,35 +185,48 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
     }
   };
 
-  const showCopyFeedback = () => {
-    const selection = window.getSelection();
-    if (selection.rangeCount > 0) {
-      const range = selection.getRangeAt(0);
-      const rect = range.getBoundingClientRect();
-      
-      const feedback = document.createElement('div');
-      feedback.textContent = '✓ Copied!';
-      feedback.style.cssText = `
-        position: fixed;
-        top: ${rect.top - 35}px;
-        left: ${rect.left + rect.width / 2 - 35}px;
-        background: #4CAF50;
-        color: white;
-        padding: 6px 12px;
-        border-radius: 4px;
-        font-size: 12px;
-        z-index: 10000;
-        pointer-events: none;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.2);
-      `;
-      
-      document.body.appendChild(feedback);
-      setTimeout(() => {
-        if (document.body.contains(feedback)) {
-          document.body.removeChild(feedback);
-        }
-      }, 2000);
+  const copyAllText = () => {
+    if (pageText) {
+      navigator.clipboard.writeText(pageText).then(() => {
+        showCopyFeedback('All text copied!');
+      }).catch(err => {
+        console.error('Copy failed:', err);
+        fallbackCopyText(pageText);
+      });
     }
+  };
+
+  const showCopyFeedback = (message = '✓ Copied!') => {
+    const selection = window.getSelection();
+    let rect = { top: 100, left: 100, width: 0 };
+    
+    if (selection.rangeCount > 0) {
+      rect = selection.getRangeAt(0).getBoundingClientRect();
+    }
+    
+    const feedback = document.createElement('div');
+    feedback.textContent = message;
+    feedback.style.cssText = `
+      position: fixed;
+      top: ${rect.top - 35}px;
+      left: ${rect.left + rect.width / 2 - 50}px;
+      background: #4CAF50;
+      color: white;
+      padding: 8px 16px;
+      border-radius: 6px;
+      font-size: 14px;
+      z-index: 10000;
+      pointer-events: none;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+      font-family: system-ui;
+    `;
+    
+    document.body.appendChild(feedback);
+    setTimeout(() => {
+      if (document.body.contains(feedback)) {
+        document.body.removeChild(feedback);
+      }
+    }, 2500);
   };
 
   const fallbackCopyText = (text) => {
@@ -343,29 +249,33 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
 
   useEffect(() => {
     const handleKeyDown = (e) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 'c') {
-        const selection = window.getSelection();
-        if (selection && selection.toString().trim()) {
+      if ((e.ctrlKey || e.metaKey)) {
+        if (e.key === 'c') {
+          const selection = window.getSelection();
+          if (selection && selection.toString().trim()) {
+            e.preventDefault();
+            copySelectedText();
+          }
+        } else if (e.key === 'a' && e.shiftKey) {
           e.preventDefault();
-          copySelectedText();
+          copyAllText();
         }
       }
     };
 
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, []);
+  }, [pageText]);
 
   const scrollToCitation = (citation) => {
     if (citation.page !== currentPage) {
       setCurrentPage(citation.page);
     }
     
-    setHighlightedCitation(citation);
-    
     setTimeout(() => {
-      if (containerRef.current) {
-        containerRef.current.scrollIntoView({ 
+      const highlightElements = document.querySelectorAll(`[data-citation-id="${citedPagesMetadata.indexOf(citation)}"]`);
+      if (highlightElements.length > 0) {
+        highlightElements[0].scrollIntoView({ 
           behavior: "smooth", 
           block: "center" 
         });
@@ -376,6 +286,7 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
   useImperativeHandle(ref, () => ({
     scrollToCitation,
     copySelectedText,
+    copyAllText
   }));
 
   const handlePrevPage = () => {
@@ -390,20 +301,13 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
     }
   };
 
-  const handleZoomIn = () => {
-    setScale(Math.min(scale + 0.2, 3.0));
-  };
-
-  const handleZoomOut = () => {
-    setScale(Math.max(scale - 0.2, 0.5));
-  };
-
   if (!pdfFile) {
     return (
       <div className="w-[65%] flex items-center justify-center bg-gray-50">
         <div className="text-center text-gray-500">
+          <DocumentTextIcon className="w-16 h-16 mx-auto mb-4 opacity-50" />
           <div className="text-lg mb-2">No PDF loaded</div>
-          <div className="text-sm">Upload a PDF file to get started</div>
+          <div className="text-sm">Upload a PDF file to extract and view text</div>
         </div>
       </div>
     );
@@ -412,67 +316,51 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
   return (
     <div className="w-[65%] flex flex-col bg-gray-50">
       {/* Toolbar */}
-      <div className="bg-white border-b p-3 flex items-center justify-between">
-        <div className="flex items-center space-x-2">
+      <div className="bg-white border-b p-4 flex items-center justify-between shadow-sm">
+        <div className="flex items-center space-x-3">
           <button
             onClick={handlePrevPage}
             disabled={currentPage <= 1 || loading}
-            className="p-2 rounded hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="p-2 rounded-lg hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             title="Previous page"
           >
             <ChevronLeftIcon className="w-5 h-5" />
           </button>
           
-          <span className="text-sm text-gray-600 min-w-[120px] text-center">
+          <span className="text-sm text-gray-600 min-w-[120px] text-center font-medium">
             {loading ? "Loading..." : `Page ${currentPage} of ${totalPages}`}
           </span>
           
           <button
             onClick={handleNextPage}
             disabled={currentPage >= totalPages || loading}
-            className="p-2 rounded hover:bg-gray-200 disabled:cursor-not-allowed"
+            className="p-2 rounded-lg hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             title="Next page"
           >
             <ChevronRightIcon className="w-5 h-5" />
           </button>
         </div>
 
-        <div className="flex items-center space-x-2">
+        <div className="flex items-center space-x-3">
           <button
             onClick={copySelectedText}
-            className="px-3 py-1 rounded hover:bg-gray-200 text-sm text-gray-600 border"
+            className="px-4 py-2 rounded-lg hover:bg-gray-100 text-sm text-gray-700 border border-gray-300 transition-colors"
             title="Copy selected text (Ctrl+C)"
           >
-            📋 Copy Text
+            📋 Copy Selection
           </button>
           
-          <div className="border-l h-6 mx-2"></div>
-          
           <button
-            onClick={handleZoomOut}
-            disabled={scale <= 0.5}
-            className="p-2 rounded hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
-            title="Zoom out"
+            onClick={copyAllText}
+            className="px-4 py-2 rounded-lg hover:bg-blue-50 text-sm text-blue-700 border border-blue-300 transition-colors"
+            title="Copy all page text (Ctrl+Shift+A)"
           >
-            <MagnifyingGlassMinusIcon className="w-5 h-5" />
-          </button>
-          
-          <span className="text-sm text-gray-600 min-w-[60px] text-center">
-            {Math.round(scale * 100)}%
-          </span>
-          
-          <button
-            onClick={handleZoomIn}
-            disabled={scale >= 3.0}
-            className="p-2 rounded hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
-            title="Zoom in"
-          >
-            <MagnifyingGlassPlusIcon className="w-5 h-5" />
+            📄 Copy All
           </button>
         </div>
       </div>
 
-      {/* PDF Viewer */}
+      {/* Text Content */}
       <div className="flex-1 overflow-auto">
         {error ? (
           <div className="flex items-center justify-center h-full text-red-500">
@@ -482,24 +370,27 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
             </div>
           </div>
         ) : (
-          <div className="min-h-full py-4">
-            <div ref={containerRef} className="flex justify-center">
-              <div className="relative shadow-lg bg-white">
-                {/* PDF Canvas - Graphics/Images only */}
-                <canvas ref={canvasRef} className="block max-w-full" />
-                
-                {/* Clean Text Layer */}
-                <div
-                  ref={textLayerRef}
-                  className="absolute top-0 left-0 pdf-text-layer"
-                />
-                
-                {loading && (
-                  <div className="absolute inset-0 bg-white bg-opacity-90 flex items-center justify-center z-50">
-                    <div className="flex items-center space-x-2">
+          <div className="min-h-full p-6">
+            <div ref={containerRef} className="max-w-4xl mx-auto">
+              <div className="bg-white rounded-lg shadow-sm border p-8 min-h-[600px]">
+                {loading ? (
+                  <div className="flex items-center justify-center h-64">
+                    <div className="flex items-center space-x-3">
                       <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-                      <span className="text-lg text-gray-700">Loading page...</span>
+                      <span className="text-lg text-gray-700">Extracting text...</span>
                     </div>
+                  </div>
+                ) : pageText ? (
+                  <div 
+                    ref={textContainerRef}
+                    className="prose prose-gray max-w-none text-content"
+                    style={{ lineHeight: '1.6', fontSize: '16px' }}
+                    dangerouslySetInnerHTML={{ __html: highlightedText.replace(/\n/g, '<br>') }}
+                  />
+                ) : (
+                  <div className="text-center text-gray-500 py-16">
+                    <DocumentTextIcon className="w-12 h-12 mx-auto mb-4 opacity-50" />
+                    <div>No text found on this page</div>
                   </div>
                 )}
               </div>
@@ -508,39 +399,50 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
         )}
       </div>
 
-      {/* Styles */}
+      {/* Styles for text highlighting */}
       <style jsx>{`
-        .pdf-text-layer {
+        .text-content {
           user-select: text;
-          pointer-events: auto;
+          -webkit-user-select: text;
+          -moz-user-select: text;
+          -ms-user-select: text;
         }
         
-        .pdf-text-item {
+        .citation-highlight {
+          background-color: #FFEB3B !important;
+          padding: 2px 4px !important;
+          border-radius: 3px !important;
+          box-shadow: 0 1px 3px rgba(255, 235, 59, 0.4) !important;
+          border: 1px solid #FFC107 !important;
+          color: #000 !important;
+          font-weight: 500 !important;
+        }
+        
+        .citation-highlight:hover {
+          background-color: #FFC107 !important;
+          box-shadow: 0 2px 6px rgba(255, 193, 7, 0.6) !important;
+        }
+        
+        .citation-highlight-word {
+          background-color: rgba(255, 235, 59, 0.6) !important;
+          padding: 1px 2px !important;
+          border-radius: 2px !important;
+          color: #000 !important;
+        }
+        
+        .text-content::selection {
+          background-color: rgba(0, 123, 255, 0.3);
+        }
+        
+        .citation-highlight::selection {
+          background-color: rgba(0, 123, 255, 0.5);
+        }
+        
+        .text-content mark {
           user-select: text !important;
           -webkit-user-select: text !important;
           -moz-user-select: text !important;
           -ms-user-select: text !important;
-        }
-        
-        .pdf-text-item.citation-highlight {
-          background-color: #FFEB3B !important;
-          box-shadow: 0 0 0 2px rgba(255, 193, 7, 0.5) !important;
-          border-radius: 2px !important;
-          padding: 1px 2px !important;
-          margin: -1px -2px !important;
-          border: 1px solid #FFC107 !important;
-        }
-        
-        .pdf-text-item.citation-highlight:hover {
-          background-color: #FFC107 !important;
-        }
-        
-        .pdf-text-item::selection {
-          background-color: rgba(0, 123, 255, 0.3) !important;
-        }
-        
-        .citation-highlight::selection {
-          background-color: rgba(0, 123, 255, 0.5) !important;
         }
       `}</style>
     </div>
