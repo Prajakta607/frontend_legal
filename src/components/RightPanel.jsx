@@ -44,7 +44,7 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
     if (pageTextContent) {
       setTimeout(() => {
         applyHighlights();
-      }, 100);
+      }, 200);
     }
   }, [citedPagesMetadata, currentPage, pageTextContent]);
 
@@ -112,42 +112,46 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
       textLayerRef.current.style.width = viewport.width + "px";
       textLayerRef.current.style.height = viewport.height + "px";
 
-      // Create text layer elements
+      // Create text layer elements using PDF.js text layer rendering
       textContent.items.forEach((textItem, index) => {
         const textElement = document.createElement("span");
         textElement.textContent = textItem.str;
         textElement.className = "text-layer-item";
         textElement.dataset.textIndex = index;
         
-        // Calculate position and size
+        // Calculate position and transformation
         const tx = textItem.transform;
         const fontHeight = Math.sqrt(tx[2] * tx[2] + tx[3] * tx[3]);
+        const fontWidth = Math.sqrt(tx[0] * tx[0] + tx[1] * tx[1]);
         const fontAscent = fontHeight;
         
         const left = tx[4];
         const top = viewport.height - tx[5] - fontAscent;
-        const fontSize = fontHeight;
         
-        // Apply styles for proper positioning and selectability
+        // Apply transformation matrix for proper text positioning
+        const transform = `matrix(${tx[0] / fontWidth}, ${tx[1] / fontWidth}, ${-tx[2] / fontHeight}, ${-tx[3] / fontHeight}, ${left}, ${top})`;
+        
+        // Apply styles for proper positioning and visibility
         Object.assign(textElement.style, {
           position: 'absolute',
-          left: left + 'px',
-          top: top + 'px',
-          fontSize: fontSize + 'px',
+          left: '0px',
+          top: '0px',
+          fontSize: fontHeight + 'px',
           fontFamily: textItem.fontName || 'sans-serif',
-          // Make text selectable with very low opacity instead of transparent
-          color: 'rgba(0, 0, 0, 0.01)',
+          transform: transform,
+          transformOrigin: '0 0',
+          // Make text black and visible for actual highlighting
+          color: 'rgba(0, 0, 0, 0.2)', // Semi-transparent black
           userSelect: 'text',
           cursor: 'text',
           whiteSpace: 'pre',
-          transformOrigin: '0 0',
-          // Enhanced selectability
           WebkitUserSelect: 'text',
           MozUserSelect: 'text',
           msUserSelect: 'text',
-          // Ensure text is above canvas but below highlights
           zIndex: '10',
-          pointerEvents: 'auto'
+          pointerEvents: 'auto',
+          // Blend mode to work well with PDF background
+          mixBlendMode: 'multiply'
         });
 
         textLayerRef.current.appendChild(textElement);
@@ -164,14 +168,15 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
     const highlightedElements = textLayerRef.current.querySelectorAll(".citation-highlight");
     highlightedElements.forEach(el => {
       el.classList.remove("citation-highlight");
+      // Reset to original semi-transparent style
       Object.assign(el.style, {
-        backgroundColor: '',
-        // Reset to low opacity instead of transparent for selectability
-        color: 'rgba(0, 0, 0, 0.01)',
-        padding: '',
-        borderRadius: '',
-        boxShadow: '',
-        zIndex: '10'
+        backgroundColor: 'transparent',
+        color: 'rgba(0, 0, 0, 0.2)',
+        padding: '0',
+        borderRadius: '0',
+        boxShadow: 'none',
+        zIndex: '10',
+        mixBlendMode: 'multiply'
       });
     });
   };
@@ -195,51 +200,60 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
     const searchText = citation.quote || citation.content_preview;
     if (!searchText || searchText.length < 3) return;
 
-    const textElements = textLayerRef.current.querySelectorAll('.text-layer-item');
-    const fullPageText = Array.from(textElements).map(el => el.textContent).join(' ');
+    const textElements = Array.from(textLayerRef.current.querySelectorAll('.text-layer-item'));
     
-    // Clean and normalize text for better matching
-    const cleanSearchText = searchText.replace(/\s+/g, ' ').trim();
-    const cleanPageText = fullPageText.replace(/\s+/g, ' ').trim();
+    // Create a text mapping for better matching
+    const textMapping = textElements.map((el, index) => ({
+      element: el,
+      text: el.textContent,
+      index: index
+    }));
+
+    // Clean search text
+    const cleanSearchText = searchText.replace(/\s+/g, ' ').trim().toLowerCase();
     
-    // Find the text in the page
-    const searchIndex = cleanPageText.toLowerCase().indexOf(cleanSearchText.toLowerCase());
+    // Try to find exact phrase matches first
+    const fullText = textMapping.map(item => item.text).join(' ').toLowerCase();
+    const searchIndex = fullText.indexOf(cleanSearchText);
     
     if (searchIndex !== -1) {
-      // Highlight exact match
-      highlightExactMatch(textElements, searchIndex, cleanSearchText.length);
+      // Found exact match - highlight the relevant elements
+      highlightExactTextMatch(textMapping, cleanSearchText, fullText, searchIndex);
     } else {
-      // Try word-based matching as fallback
-      highlightWordMatch(textElements, cleanSearchText);
+      // Fallback to word-based matching
+      highlightWordBasedMatch(textMapping, cleanSearchText);
     }
   };
 
-  const highlightExactMatch = (textElements, startIndex, searchLength) => {
+  const highlightExactTextMatch = (textMapping, searchText, fullText, searchIndex) => {
     let currentIndex = 0;
+    const searchEnd = searchIndex + searchText.length;
     
-    textElements.forEach(element => {
-      const textLength = element.textContent.length;
-      const elementStart = currentIndex;
-      const elementEnd = currentIndex + textLength;
+    textMapping.forEach(({ element, text }) => {
+      const textStart = currentIndex;
+      const textEnd = currentIndex + text.length;
       
-      // Check if this element overlaps with our search text
-      if (elementStart < startIndex + searchLength && elementEnd > startIndex) {
+      // Check if this text element overlaps with the search match
+      if (textStart < searchEnd && textEnd > searchIndex) {
         highlightElement(element);
       }
       
-      currentIndex = elementEnd + 1; // +1 for space between elements
+      // Account for space between elements
+      currentIndex = textEnd + 1;
     });
   };
 
-  const highlightWordMatch = (textElements, searchText) => {
-    const words = searchText.toLowerCase().split(/\s+/).filter(word => word.length > 3);
+  const highlightWordBasedMatch = (textMapping, searchText) => {
+    const searchWords = searchText.split(/\s+/).filter(word => word.length > 2);
     
-    textElements.forEach(element => {
-      const elementText = element.textContent.toLowerCase();
-      const matchingWords = words.filter(word => elementText.includes(word));
+    textMapping.forEach(({ element, text }) => {
+      const elementText = text.toLowerCase();
+      const matchingWords = searchWords.filter(word => 
+        elementText.includes(word) || word.includes(elementText.trim())
+      );
       
-      // Highlight if element contains significant words from the search text
-      if (matchingWords.length > 0 && matchingWords.length / words.length > 0.3) {
+      // Highlight if element contains significant portion of search words
+      if (matchingWords.length > 0 && (matchingWords.length / searchWords.length) >= 0.4) {
         highlightElement(element);
       }
     });
@@ -248,37 +262,89 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
   const highlightElement = (element) => {
     element.classList.add("citation-highlight");
     Object.assign(element.style, {
-      backgroundColor: '#ffeb3b',
-      color: '#000000', // Full opacity for highlighted text
-      padding: '2px 4px',
-      borderRadius: '3px',
-      boxShadow: '0 1px 3px rgba(255, 235, 59, 0.5)',
-      zIndex: '100', // Higher z-index for highlighted text
-      position: 'relative'
+      backgroundColor: 'rgba(255, 235, 59, 0.8)', // Semi-transparent yellow
+      color: 'rgba(0, 0, 0, 0.9)', // More opaque black text
+      padding: '2px 3px',
+      borderRadius: '2px',
+      boxShadow: '0 1px 2px rgba(255, 235, 59, 0.4)',
+      zIndex: '100',
+      mixBlendMode: 'normal', // Reset blend mode for highlights
+      border: '1px solid rgba(255, 193, 7, 0.6)'
     });
   };
 
-  // Add function to copy selected text
+  // Enhanced text copying function
   const copySelectedText = () => {
     const selection = window.getSelection();
     if (selection.rangeCount > 0) {
       const selectedText = selection.toString();
-      if (selectedText) {
+      if (selectedText.trim()) {
         navigator.clipboard.writeText(selectedText).then(() => {
-          console.log('Text copied to clipboard');
-          // You can add a toast notification here if needed
+          console.log('Text copied to clipboard:', selectedText);
+          // Show brief visual feedback
+          showCopyFeedback();
         }).catch(err => {
           console.error('Failed to copy text: ', err);
+          // Fallback for older browsers
+          fallbackCopyText(selectedText);
         });
       }
     }
   };
 
-  // Add keyboard shortcut for copying
+  const showCopyFeedback = () => {
+    // You can implement a toast notification here
+    const selection = window.getSelection();
+    if (selection.rangeCount > 0) {
+      const range = selection.getRangeAt(0);
+      const rect = range.getBoundingClientRect();
+      
+      // Create temporary feedback element
+      const feedback = document.createElement('div');
+      feedback.textContent = 'Copied!';
+      feedback.style.cssText = `
+        position: fixed;
+        top: ${rect.top - 30}px;
+        left: ${rect.left + rect.width / 2 - 25}px;
+        background: #4CAF50;
+        color: white;
+        padding: 4px 8px;
+        border-radius: 4px;
+        font-size: 12px;
+        z-index: 10000;
+        pointer-events: none;
+      `;
+      
+      document.body.appendChild(feedback);
+      setTimeout(() => {
+        document.body.removeChild(feedback);
+      }, 1500);
+    }
+  };
+
+  const fallbackCopyText = (text) => {
+    const textArea = document.createElement('textarea');
+    textArea.value = text;
+    document.body.appendChild(textArea);
+    textArea.focus();
+    textArea.select();
+    try {
+      document.execCommand('copy');
+      showCopyFeedback();
+    } catch (err) {
+      console.error('Fallback copy failed:', err);
+    }
+    document.body.removeChild(textArea);
+  };
+
+  // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 'c') {
-        copySelectedText();
+        const selection = window.getSelection();
+        if (selection && selection.toString().trim()) {
+          copySelectedText();
+        }
       }
     };
 
@@ -287,15 +353,12 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
   }, []);
 
   const scrollToCitation = (citation) => {
-    // Navigate to the page of the citation
     if (citation.page !== currentPage) {
       setCurrentPage(citation.page);
     }
     
-    // Set this citation as highlighted
     setHighlightedCitation(citation);
     
-    // Scroll container into view
     setTimeout(() => {
       if (containerRef.current) {
         containerRef.current.scrollIntoView({ 
@@ -303,10 +366,9 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
           block: "center" 
         });
       }
-    }, 200);
+    }, 300);
   };
 
-  // Expose methods to parent component
   useImperativeHandle(ref, () => ({
     scrollToCitation,
     copySelectedText,
@@ -374,11 +436,13 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
         <div className="flex items-center space-x-2">
           <button
             onClick={copySelectedText}
-            className="p-2 rounded hover:bg-gray-200 text-sm text-gray-600"
+            className="px-3 py-1 rounded hover:bg-gray-200 text-sm text-gray-600 border"
             title="Copy selected text (Ctrl+C)"
           >
-            Copy Text
+            📋 Copy
           </button>
+          
+          <div className="border-l h-6 mx-2"></div>
           
           <button
             onClick={handleZoomOut}
@@ -419,7 +483,7 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
               <div className="relative shadow-lg bg-white">
                 <canvas ref={canvasRef} className="block max-w-full" />
                 
-                {/* Text layer for selection and highlighting */}
+                {/* Text layer positioned over the canvas */}
                 <div
                   ref={textLayerRef}
                   className="absolute top-0 left-0 text-layer"
@@ -432,9 +496,8 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
                   }}
                 />
                 
-                {/* Loading overlay */}
                 {loading && (
-                  <div className="absolute inset-0 bg-white bg-opacity-90 flex items-center justify-center">
+                  <div className="absolute inset-0 bg-white bg-opacity-90 flex items-center justify-center z-50">
                     <div className="flex items-center space-x-2">
                       <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
                       <span className="text-lg text-gray-700">Loading page...</span>
@@ -447,7 +510,7 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
         )}
       </div>
 
-      {/* Enhanced CSS for text layer and highlights */}
+      {/* CSS for actual text highlighting */}
       <style jsx>{`
         .text-layer {
           font-size: 1px;
@@ -457,7 +520,7 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
         
         .text-layer-item {
           position: absolute;
-          color: rgba(0, 0, 0, 0.01);
+          color: rgba(0, 0, 0, 0.2);
           user-select: text !important;
           -webkit-user-select: text !important;
           -moz-user-select: text !important;
@@ -467,34 +530,37 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata,
           transform-origin: 0 0;
           z-index: 10;
           pointer-events: auto;
+          mix-blend-mode: multiply;
+          font-weight: inherit;
         }
         
         .citation-highlight {
-          background-color: #ffeb3b !important;
-          color: #000000 !important;
-          padding: 2px 4px !important;
-          border-radius: 3px !important;
-          box-shadow: 0 1px 3px rgba(255, 235, 59, 0.5) !important;
+          background-color: rgba(255, 235, 59, 0.8) !important;
+          color: rgba(0, 0, 0, 0.9) !important;
+          padding: 2px 3px !important;
+          border-radius: 2px !important;
+          box-shadow: 0 1px 2px rgba(255, 235, 59, 0.4) !important;
           z-index: 100 !important;
-          position: relative !important;
+          mix-blend-mode: normal !important;
+          border: 1px solid rgba(255, 193, 7, 0.6) !important;
         }
         
         .citation-highlight:hover {
-          background-color: #ffc107 !important;
-          box-shadow: 0 2px 6px rgba(255, 193, 7, 0.6) !important;
+          background-color: rgba(255, 193, 7, 0.9) !important;
+          box-shadow: 0 2px 4px rgba(255, 193, 7, 0.6) !important;
         }
         
         .text-layer-item::selection {
           background-color: rgba(0, 123, 255, 0.3) !important;
-          color: #000000 !important;
+          color: rgba(0, 0, 0, 0.9) !important;
         }
         
         .citation-highlight::selection {
           background-color: rgba(0, 123, 255, 0.5) !important;
-          color: #000000 !important;
+          color: rgba(0, 0, 0, 1) !important;
         }
         
-        /* Ensure text selection works properly */
+        /* Ensure all text elements are selectable */
         .text-layer * {
           user-select: text !important;
           -webkit-user-select: text !important;
