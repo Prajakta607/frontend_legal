@@ -24,7 +24,7 @@ export default function App() {
     formData.append("question_type", "general_question");
 
     try {
-      const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000';
+      const BACKEND_URL ='http://localhost:8000';
       const res = await fetch(`${BACKEND_URL}/ask`, {
         method: "POST",
         body: formData,
