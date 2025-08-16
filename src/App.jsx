@@ -35,16 +35,16 @@ export default function App() {
     // Logic: Send case_id if we have one, otherwise send file
     if (caseId) {
       formData.append("case_id", caseId);
-      console.log("Sending with case_id:", caseId);
+      console.log("🔄 SUBSEQUENT REQUEST - Sending with case_id:", caseId);
     } else if (pdfFile) {
       formData.append("file", pdfFile);
-      console.log("Sending with new file:", pdfFile.name);
+      console.log("🆕 FIRST REQUEST - Sending with new file:", pdfFile.name);
     }
 
     // Debug: Log what we're sending
-    console.log("FormData contents:");
+    console.log("📤 FormData contents:");
     for (let pair of formData.entries()) {
-      console.log(pair[0] + ':', pair[1]);
+      console.log(`  ${pair[0]}:`, pair[1]);
     }
 
     try {
@@ -54,10 +54,13 @@ export default function App() {
         body: formData,
       });
       
+      console.log("📡 Response status:", res.status);
+      console.log("📡 Response ok:", res.ok);
+      
       if (!res.ok) {
         // Handle case where case_id might be invalid/expired
         if ((res.status === 404 || res.status === 400) && caseId) {
-          console.warn("Case ID invalid/expired, clearing session");
+          console.warn("⚠️ Case ID invalid/expired, clearing session");
           localStorage.removeItem("case_id");
           setCaseId(null);
           setAnswer("Your session has expired. Please upload the PDF file again to continue.");
@@ -67,14 +70,42 @@ export default function App() {
         throw new Error(`HTTP error! status: ${res.status}`);
       }
       
-      const data = await res.json();
-      console.log("Backend response:", data);
+      // Get raw response text first
+      const responseText = await res.text();
+      console.log("📥 Raw response text:", responseText);
+      
+      // Parse JSON
+      let data;
+      try {
+        data = JSON.parse(responseText);
+      } catch (parseError) {
+        console.error("❌ JSON parse error:", parseError);
+        console.error("📄 Response text that failed to parse:", responseText);
+        throw new Error("Invalid JSON response from server");
+      }
+      
+      // Enhanced debug logging
+      console.log("=== 📋 FULL BACKEND RESPONSE ===");
+      console.log("Raw response object:", data);
+      console.log("Response keys:", Object.keys(data));
+      console.log("✅ answer:", data.answer ? "Present" : "Missing");
+      console.log("✅ cited_pages_metadata:", data.cited_pages_metadata ? "Present" : "Missing"); 
+      console.log("✅ case_id:", data.case_id ? `Present: ${data.case_id}` : "Missing");
+      console.log("✅ case_id type:", typeof data.case_id);
+      console.log("Current stored case_id:", caseId);
+      console.log("================================");
       
       // Store case_id if it's new (from first upload)
-      if (data.case_id && data.case_id !== caseId) {
-        console.log("Storing new case_id:", data.case_id);
-        localStorage.setItem("case_id", data.case_id);
-        setCaseId(data.case_id);
+      if (data.case_id) {
+        if (data.case_id !== caseId) {
+          console.log("💾 Storing NEW case_id:", data.case_id);
+          localStorage.setItem("case_id", data.case_id);
+          setCaseId(data.case_id);
+        } else {
+          console.log("ℹ️ Same case_id returned:", data.case_id);
+        }
+      } else {
+        console.warn("⚠️ No case_id in response!");
       }
       
       setAnswer(data.answer || "");
@@ -84,8 +115,11 @@ export default function App() {
       if (data.doc_id) {
         setDocId(data.doc_id);
       }
+      
+      console.log("✅ State updated successfully");
+      
     } catch (err) {
-      console.error("Ask failed:", err);
+      console.error("❌ Ask failed:", err);
       setAnswer("Sorry, there was an error processing your request.");
       setCitedPagesMetadata([]);
       
@@ -118,7 +152,7 @@ export default function App() {
     localStorage.removeItem("case_id");
     setCaseId(null);
     
-    console.log("New file uploaded, starting fresh session");
+    console.log("🆕 New file uploaded, starting fresh session");
   };
 
   // Clear session function
@@ -130,7 +164,7 @@ export default function App() {
     setMessage("");
     localStorage.removeItem("case_id");
     setCaseId(null);
-    console.log("Session cleared");
+    console.log("🔄 Session cleared");
   };
 
   // Function to check if we have an active session

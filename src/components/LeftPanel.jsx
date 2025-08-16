@@ -11,11 +11,12 @@ export default function LeftPanel({
   onCitationClick,
   isLoading,
   hasActiveSession,
-  canSendMessage, // New prop added
+  canSendMessage,
   onNewSession,
   caseId,
 }) {
   const [showMetadataDetails, setShowMetadataDetails] = useState(false);
+  const [showDebugInfo, setShowDebugInfo] = useState(false);
 
   // Assign a consistent color for each page
   const colors = [
@@ -38,7 +39,7 @@ export default function LeftPanel({
 
   // Handle pressing Enter key in input to send the message
   const handleKeyDown = (e) => {
-    if (e.key === "Enter" && canSendMessage) { // Updated condition
+    if (e.key === "Enter" && canSendMessage) {
       onSend();
     }
   };
@@ -68,13 +69,16 @@ export default function LeftPanel({
   // Get document metadata (from first citation if available)
   const documentMetadata = citedPagesMetadata.length > 0 ? citedPagesMetadata[0] : null;
 
+  // Get stored case_id from localStorage for comparison
+  const storedCaseId = localStorage.getItem("case_id");
+
   return (
     <div className="w-[35%] flex flex-col border-l bg-white">
       {/* Session status bar */}
       {hasActiveSession && (
         <div className="px-4 py-2 bg-green-50 border-b border-green-200 flex items-center justify-between">
           <div className="flex items-center space-x-2">
-            <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+            <div className={`w-2 h-2 rounded-full ${caseId ? 'bg-green-500' : 'bg-yellow-500'}`}></div>
             <span className="text-sm text-green-700 font-medium">
               {caseId ? 'Active Session' : 'Document Ready'}
             </span>
@@ -84,23 +88,38 @@ export default function LeftPanel({
               </span>
             )}
           </div>
-          {onNewSession && (
+          <div className="flex items-center space-x-2">
             <button
-              onClick={onNewSession}
-              className="text-xs text-green-600 hover:text-green-800 flex items-center space-x-1"
-              title="Start new session"
+              onClick={() => setShowDebugInfo(!showDebugInfo)}
+              className="text-xs text-blue-600 hover:text-blue-800"
+              title="Toggle debug info"
             >
-              <XMarkIcon className="w-3 h-3" />
-              <span>New Session</span>
+              {showDebugInfo ? '🔍' : '🔍'}
             </button>
-          )}
+            {onNewSession && (
+              <button
+                onClick={onNewSession}
+                className="text-xs text-green-600 hover:text-green-800 flex items-center space-x-1"
+                title="Start new session"
+              >
+                <XMarkIcon className="w-3 h-3" />
+                <span>New Session</span>
+              </button>
+            )}
+          </div>
         </div>
       )}
 
-      {/* Debug info - Remove this in production */}
-      {process.env.NODE_ENV === 'development' && (
-        <div className="px-4 py-1 bg-yellow-50 border-b text-xs text-yellow-700">
-          Debug: Session={hasActiveSession ? 'Yes' : 'No'} | CaseID={caseId ? 'Yes' : 'No'} | CanSend={canSendMessage ? 'Yes' : 'No'}
+      {/* Debug info panel */}
+      {showDebugInfo && (
+        <div className="px-4 py-2 bg-blue-50 border-b border-blue-200 text-xs">
+          <div className="font-mono space-y-1">
+            <div><strong>Session State:</strong> {hasActiveSession ? '✅ Active' : '❌ None'}</div>
+            <div><strong>Case ID (state):</strong> {caseId ? `✅ ${caseId}` : '❌ None'}</div>
+            <div><strong>Case ID (localStorage):</strong> {storedCaseId ? `✅ ${storedCaseId}` : '❌ None'}</div>
+            <div><strong>Can Send:</strong> {canSendMessage ? '✅ Yes' : '❌ No'}</div>
+            <div><strong>Loading:</strong> {isLoading ? '🔄 Yes' : '✅ No'}</div>
+          </div>
         </div>
       )}
 
@@ -254,8 +273,8 @@ export default function LeftPanel({
       <div className="p-3 border-t bg-white">
         {/* Session info for follow-up questions */}
         {hasActiveSession && !isLoading && caseId && (
-          <div className="mb-2 text-xs text-gray-600 bg-gray-50 px-2 py-1 rounded">
-            💡 You can now ask follow-up questions without re-uploading the document
+          <div className="mb-2 text-xs text-green-600 bg-green-50 px-2 py-1 rounded">
+            💡 Session active! Ask follow-up questions without re-uploading.
           </div>
         )}
 
@@ -263,6 +282,13 @@ export default function LeftPanel({
         {hasActiveSession && !isLoading && !caseId && (
           <div className="mb-2 text-xs text-orange-600 bg-orange-50 px-2 py-1 rounded">
             📄 Document ready - ask your first question to start the session
+          </div>
+        )}
+
+        {/* Case ID mismatch warning */}
+        {caseId && storedCaseId && caseId !== storedCaseId && (
+          <div className="mb-2 text-xs text-red-600 bg-red-50 px-2 py-1 rounded">
+            ⚠️ Case ID mismatch detected! State: {caseId.slice(-8)} vs Storage: {storedCaseId.slice(-8)}
           </div>
         )}
         
@@ -318,7 +344,7 @@ export default function LeftPanel({
           />
           <button
             onClick={onSend}
-            disabled={!canSendMessage} // Updated to use canSendMessage prop
+            disabled={!canSendMessage}
             className={`px-4 py-2 rounded-lg text-white ${
               canSendMessage
                 ? "bg-blue-500 hover:bg-blue-600"
@@ -337,12 +363,15 @@ export default function LeftPanel({
           </button>
         </div>
 
-        {/* Status indicator */}
-        {process.env.NODE_ENV === 'development' && (
-          <div className="mt-2 text-xs text-gray-500">
-            Status: {!hasActiveSession ? 'No session' : caseId ? `Active (ID: ${caseId.slice(-8)})` : 'File ready'}
-          </div>
-        )}
+        {/* Status indicator for debugging */}
+        <div className="mt-2 text-xs text-gray-500 flex justify-between">
+          <span>
+            Status: {!hasActiveSession ? 'No session' : caseId ? `Active (${caseId.slice(-8)})` : 'File ready'}
+          </span>
+          <span>
+            {canSendMessage ? '✅ Ready' : '⏳ Not ready'}
+          </span>
+        </div>
       </div>
     </div>
   );
