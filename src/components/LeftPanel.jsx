@@ -236,13 +236,7 @@ export default function LeftPanel({
             value={message}
             onChange={(e) => setMessage(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder={
-              !hasActiveSession 
-                ? "Upload a PDF and ask a question..."
-                : caseId 
-                  ? "Ask a follow-up question..." 
-                  : "Ask your first question..."
-            }
+            placeholder="Ask a question..."
             className="flex-1 p-2 border rounded-lg focus:outline-none focus:ring focus:ring-blue-200 disabled:bg-gray-100"
             aria-label="Type your question"
             disabled={isLoading}
@@ -256,13 +250,6 @@ export default function LeftPanel({
                 : "bg-blue-300 cursor-not-allowed"
             }`}
             aria-disabled={!canSendMessage}
-            title={
-              !hasActiveSession && message.trim() 
-                ? "Please upload a PDF first" 
-                : !message.trim()
-                  ? "Please enter a question"
-                  : ""
-            }
           >
             {isLoading ? "..." : "Send"}
           </button>
