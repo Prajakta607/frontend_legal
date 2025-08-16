@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { PaperClipIcon, DocumentIcon, CalendarIcon, UserIcon, XMarkIcon } from "@heroicons/react/24/outline";
+import { PaperClipIcon, DocumentIcon, CalendarIcon, UserIcon } from "@heroicons/react/24/outline";
 
 export default function LeftPanel({
   answer,
@@ -16,7 +16,6 @@ export default function LeftPanel({
   caseId,
 }) {
   const [showMetadataDetails, setShowMetadataDetails] = useState(false);
-  const [showDebugInfo, setShowDebugInfo] = useState(false);
 
   // Assign a consistent color for each page
   const colors = [
@@ -69,77 +68,16 @@ export default function LeftPanel({
   // Get document metadata (from first citation if available)
   const documentMetadata = citedPagesMetadata.length > 0 ? citedPagesMetadata[0] : null;
 
-  // Get stored case_id from localStorage for comparison
-  const storedCaseId = localStorage.getItem("case_id");
-
   return (
     <div className="w-[35%] flex flex-col border-l bg-white">
-      {/* Session status bar */}
-      {hasActiveSession && (
-        <div className="px-4 py-2 bg-green-50 border-b border-green-200 flex items-center justify-between">
-          <div className="flex items-center space-x-2">
-            <div className={`w-2 h-2 rounded-full ${caseId ? 'bg-green-500' : 'bg-yellow-500'}`}></div>
-            <span className="text-sm text-green-700 font-medium">
-              {caseId ? 'Active Session' : 'Document Ready'}
-            </span>
-            {caseId && (
-              <span className="text-xs text-green-600 bg-green-100 px-2 py-0.5 rounded">
-                ID: {caseId.slice(-8)}
-              </span>
-            )}
-          </div>
-          <div className="flex items-center space-x-2">
-            <button
-              onClick={() => setShowDebugInfo(!showDebugInfo)}
-              className="text-xs text-blue-600 hover:text-blue-800"
-              title="Toggle debug info"
-            >
-              {showDebugInfo ? '🔍' : '🔍'}
-            </button>
-            {onNewSession && (
-              <button
-                onClick={onNewSession}
-                className="text-xs text-green-600 hover:text-green-800 flex items-center space-x-1"
-                title="Start new session"
-              >
-                <XMarkIcon className="w-3 h-3" />
-                <span>New Session</span>
-              </button>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* Debug info panel */}
-      {showDebugInfo && (
-        <div className="px-4 py-2 bg-blue-50 border-b border-blue-200 text-xs">
-          <div className="font-mono space-y-1">
-            <div><strong>Session State:</strong> {hasActiveSession ? '✅ Active' : '❌ None'}</div>
-            <div><strong>Case ID (state):</strong> {caseId ? `✅ ${caseId}` : '❌ None'}</div>
-            <div><strong>Case ID (localStorage):</strong> {storedCaseId ? `✅ ${storedCaseId}` : '❌ None'}</div>
-            <div><strong>Can Send:</strong> {canSendMessage ? '✅ Yes' : '❌ No'}</div>
-            <div><strong>Loading:</strong> {isLoading ? '🔄 Yes' : '✅ No'}</div>
-          </div>
-        </div>
-      )}
-
       {/* Answer display area */}
       <div className="flex-1 overflow-y-auto p-4">
         {/* Initial state - no active session */}
         {!hasActiveSession && !answer && !isLoading && (
           <div className="text-center text-gray-500 mt-8">
             <DocumentIcon className="w-16 h-16 mx-auto mb-4 opacity-50" />
-            <h3 className="text-lg font-medium mb-2">Welcome to Legal Document Assistant</h3>
-            <p className="text-sm mb-4">Upload a PDF document and ask questions to get started.</p>
-            <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-left">
-              <h4 className="font-medium text-blue-800 mb-2">How it works:</h4>
-              <ol className="text-sm text-blue-700 space-y-1">
-                <li>1. Upload your PDF document</li>
-                <li>2. Ask questions about the content</li>
-                <li>3. Get answers with page citations</li>
-                <li>4. Continue asking follow-up questions</li>
-              </ol>
-            </div>
+            <h3 className="text-lg font-medium mb-2">Legal Document Assistant</h3>
+            <p className="text-sm">Upload a PDF document and ask questions.</p>
           </div>
         )}
 
@@ -270,36 +208,13 @@ export default function LeftPanel({
       </div>
 
       {/* Input area for question and file upload */}
-      <div className="p-3 border-t bg-white">
-        {/* Session info for follow-up questions */}
-        {hasActiveSession && !isLoading && caseId && (
-          <div className="mb-2 text-xs text-green-600 bg-green-50 px-2 py-1 rounded">
-            💡 Session active! Ask follow-up questions without re-uploading.
-          </div>
-        )}
-
-        {/* Warning when file uploaded but no case_id yet */}
-        {hasActiveSession && !isLoading && !caseId && (
-          <div className="mb-2 text-xs text-orange-600 bg-orange-50 px-2 py-1 rounded">
-            📄 Document ready - ask your first question to start the session
-          </div>
-        )}
-
-        {/* Case ID mismatch warning */}
-        {caseId && storedCaseId && caseId !== storedCaseId && (
-          <div className="mb-2 text-xs text-red-600 bg-red-50 px-2 py-1 rounded">
-            ⚠️ Case ID mismatch detected! State: {caseId.slice(-8)} vs Storage: {storedCaseId.slice(-8)}
-          </div>
-        )}
-        
+      <div className="p-3 border-t bg-white">        
         <div className="flex items-center space-x-2">
           <label
             htmlFor="file-upload"
-            className={`cursor-pointer p-1 rounded hover:bg-gray-200 ${
-              hasActiveSession && caseId ? 'opacity-50' : ''
-            }`}
-            aria-label={hasActiveSession && caseId ? "Upload new PDF (will start new session)" : "Upload PDF"}
-            title={hasActiveSession && caseId ? "Upload new PDF (will start new session)" : "Upload PDF"}
+            className="cursor-pointer p-1 rounded hover:bg-gray-200"
+            aria-label="Upload PDF"
+            title="Upload PDF"
           >
             <PaperClipIcon className="w-6 h-6 text-gray-500" />
           </label>
@@ -310,16 +225,6 @@ export default function LeftPanel({
             className="hidden"
             onChange={(e) => {
               if (e.target.files.length > 0) {
-                // Show confirmation if there's an active session with case_id
-                if (hasActiveSession && caseId) {
-                  const confirmed = window.confirm(
-                    "Uploading a new document will start a new session. Continue?"
-                  );
-                  if (!confirmed) {
-                    e.target.value = null;
-                    return;
-                  }
-                }
                 onUpload(e.target.files[0]);
               }
               e.target.value = null;
@@ -361,16 +266,6 @@ export default function LeftPanel({
           >
             {isLoading ? "..." : "Send"}
           </button>
-        </div>
-
-        {/* Status indicator for debugging */}
-        <div className="mt-2 text-xs text-gray-500 flex justify-between">
-          <span>
-            Status: {!hasActiveSession ? 'No session' : caseId ? `Active (${caseId.slice(-8)})` : 'File ready'}
-          </span>
-          <span>
-            {canSendMessage ? '✅ Ready' : '⏳ Not ready'}
-          </span>
         </div>
       </div>
     </div>
