@@ -35,6 +35,7 @@ export default function App() {
       }
       
       const data = await res.json();
+      localStorage.setItem("case_id", data.case_id);
       setAnswer(data.answer || "");
       setCitedPagesMetadata(data.cited_pages_metadata || []);
       

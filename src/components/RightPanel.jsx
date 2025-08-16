@@ -1,9 +1,33 @@
 import React, { useState, useEffect, useRef, forwardRef, useImperativeHandle } from "react";
-import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf";
 
-// Set up PDF.js worker with a more reliable CDN
-pdfjsLib.GlobalWorkerOptions.workerSrc =
-  "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+// Load PDF.js from CDN
+let pdfjsLib = null;
+
+// Initialize PDF.js when component mounts
+const initPdfJs = async () => {
+  if (typeof window !== 'undefined' && !pdfjsLib) {
+    // Load PDF.js from CDN
+    const script = document.createElement('script');
+    script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+    script.async = true;
+    
+    return new Promise((resolve, reject) => {
+      script.onload = () => {
+        if (window.pdfjsLib) {
+          pdfjsLib = window.pdfjsLib;
+          // Set up PDF.js worker
+          pdfjsLib.GlobalWorkerOptions.workerSrc =
+            "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+          resolve();
+        } else {
+          reject(new Error('PDF.js failed to load'));
+        }
+      };
+      script.onerror = () => reject(new Error('Failed to load PDF.js script'));
+      document.head.appendChild(script);
+    });
+  }
+};
 
 // Fallback icons if heroicons is not available
 const ChevronLeftIcon = ({ className }) => (
@@ -32,6 +56,7 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata 
   const [error, setError] = useState(null);
   const [pageText, setPageText] = useState('');
   const [highlightedText, setHighlightedText] = useState('');
+  const [pdfJsReady, setPdfJsReady] = useState(false);
 
   const containerRef = useRef();
   const textContainerRef = useRef();
@@ -49,11 +74,21 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata 
     }
   };
 
+  // Initialize PDF.js on component mount
+  useEffect(() => {
+    initPdfJs().then(() => {
+      setPdfJsReady(true);
+    }).catch(err => {
+      console.error('Failed to initialize PDF.js:', err);
+      setError('Failed to load PDF.js library');
+    });
+  }, []);
+
   // Load PDF when file changes
   useEffect(() => {
-    if (pdfFile) {
+    if (pdfFile && pdfJsReady) {
       loadPDF(pdfFile);
-    } else {
+    } else if (!pdfFile) {
       cleanup();
       setPdf(null);
       setCurrentPage(1);
@@ -63,7 +98,7 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata 
     }
 
     return cleanup; // Cleanup on unmount
-  }, [pdfFile]);
+  }, [pdfFile, pdfJsReady]);
 
   // Extract text when PDF or page changes
   useEffect(() => {
@@ -80,6 +115,11 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata 
   }, [citedPagesMetadata, currentPage, pageText]);
 
   const loadPDF = async (file) => {
+    if (!pdfjsLib) {
+      setError('PDF.js library not loaded');
+      return;
+    }
+    
     setLoading(true);
     setError(null);
     
@@ -195,22 +235,25 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata 
         // Clean and normalize search text for better matching
         const cleanSearchText = searchText.replace(/\s+/g, ' ').trim();
         
-        // Try exact match first with flexible whitespace
-        const flexibleSearchText = cleanSearchText.replace(/\s+/g, '\\s+');
-        const exactRegex = new RegExp(escapeRegExp(flexibleSearchText), 'gi');
+        // Try exact match first - but preserve original spacing in the result
+        const escapedText = escapeRegExp(cleanSearchText);
+        const exactRegex = new RegExp(escapedText, 'gi');
         let matches = [...highlightedContent.matchAll(exactRegex)];
         
-        // If no exact match, try flexible pattern matching for multi-word phrases
+        // If no exact match, try flexible pattern matching
         if (matches.length === 0) {
+          // Create a flexible regex that matches the words with any spacing/punctuation between
           const words = cleanSearchText.split(/\s+/).filter(word => word.length > 2);
           
           if (words.length > 1) {
-            // Create pattern that allows for punctuation and flexible spacing
-            const wordPatterns = words.map(word => word.replace(/[,.\-&()]/g, ''));
-            const sequencePattern = wordPatterns.map(word => 
-              `\\b${escapeRegExp(word)}\\b`
-            ).join('[\\s,.&()\\-]*');
+            // Match words in sequence with flexible spacing but preserve original text
+            const wordPatterns = words.map(word => {
+              const cleanWord = word.replace(/[,.\-&()!?;:]/g, '');
+              return `\\b${escapeRegExp(cleanWord)}\\b`;
+            });
             
+            // Allow for some words/punctuation between, but not too much
+            const sequencePattern = wordPatterns.join('(?:[\\s,.&()\\-!?;:]{1,10}\\w{0,15}[\\s,.&()\\-!?;:]{0,10})?');
             const sequenceRegex = new RegExp(sequencePattern, 'gi');
             matches = [...highlightedContent.matchAll(sequenceRegex)];
           }
@@ -218,25 +261,26 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata 
         
         if (matches.length > 0) {
           // Replace matches with highlighted versions (in reverse order to maintain indices)
-          matches.reverse().forEach(match => {
+          matches.reverse().forEach((match, matchIndex) => {
             const start = match.index;
             const end = start + match[0].length;
-            const highlightId = `highlight-${index}-${start}`;
+            const originalText = match[0]; // Preserve original spacing and formatting
+            const highlightId = `highlight-${index}-${matchIndex}`;
             
             highlightedContent = 
               highlightedContent.slice(0, start) +
-              `<mark class="citation-highlight" data-citation-id="${index}" id="${highlightId}">${match[0]}</mark>` +
+              `<mark class="citation-highlight" data-citation-id="${index}" id="${highlightId}">${originalText}</mark>` +
               highlightedContent.slice(end);
           });
         } else {
-          // Final fallback: highlight individual words
+          // Final fallback: highlight individual words without affecting spacing
           const words = cleanSearchText.split(/\s+/).filter(word => word.length > 2);
           words.forEach(word => {
-            const cleanWord = word.replace(/[,.\-&()]/g, '');
+            const cleanWord = word.replace(/[,.\-&()!?;:]/g, '');
             if (cleanWord.length > 2) {
-              const wordRegex = new RegExp(`\\b${escapeRegExp(cleanWord)}\\b`, 'gi');
+              const wordRegex = new RegExp(`\\b(${escapeRegExp(cleanWord)})\\b`, 'gi');
               highlightedContent = highlightedContent.replace(wordRegex, 
-                `<mark class="citation-highlight-word" data-citation-id="${index}">$&</mark>`
+                `<mark class="citation-highlight-word" data-citation-id="${index}">$1</mark>`
               );
             }
           });
@@ -481,7 +525,14 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata 
 
       {/* Text Content */}
       <div className="flex-1 overflow-auto">
-        {error ? (
+        {!pdfJsReady ? (
+          <div className="flex items-center justify-center h-full text-blue-500 p-6">
+            <div className="text-center">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto mb-4"></div>
+              <div className="text-lg">Loading PDF.js library...</div>
+            </div>
+          </div>
+        ) : error ? (
           <div className="flex items-center justify-center h-full text-red-500 p-6">
             <div className="text-center max-w-md">
               <div className="text-lg mb-2">Error loading PDF</div>
@@ -533,46 +584,68 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata 
           -webkit-user-select: text;
           -moz-user-select: text;
           -ms-user-select: text;
+          word-spacing: normal;
+          letter-spacing: normal;
         }
         
         .citation-highlight {
           background-color: #FFEB3B !important;
-          padding: 3px 5px !important;
-          border-radius: 4px !important;
-          box-shadow: 0 1px 3px rgba(255, 235, 59, 0.4) !important;
-          border: 1px solid #FFC107 !important;
-          color: #000 !important;
-          font-weight: 500 !important;
+          padding: 1px 2px !important;
+          border-radius: 2px !important;
+          box-shadow: none !important;
+          border: none !important;
+          color: inherit !important;
+          font-weight: inherit !important;
           display: inline !important;
           line-height: inherit !important;
-          white-space: pre-wrap !important;
-          transition: all 0.2s ease !important;
+          word-spacing: inherit !important;
+          letter-spacing: inherit !important;
+          white-space: inherit !important;
+          transition: none !important;
+          margin: 0 !important;
+          font-size: inherit !important;
+          font-family: inherit !important;
         }
         
         .citation-highlight:hover {
           background-color: #FFC107 !important;
-          box-shadow: 0 2px 6px rgba(255, 193, 7, 0.6) !important;
-          transform: translateY(-1px) !important;
         }
         
         .citation-highlight-word {
           background-color: rgba(255, 235, 59, 0.7) !important;
-          padding: 2px 3px !important;
-          border-radius: 3px !important;
-          color: #000 !important;
+          padding: 0px 1px !important;
+          border-radius: 1px !important;
+          color: inherit !important;
           display: inline !important;
           line-height: inherit !important;
-          transition: all 0.2s ease !important;
+          word-spacing: inherit !important;
+          letter-spacing: inherit !important;
+          transition: none !important;
+          margin: 0 !important;
+          font-size: inherit !important;
+          font-family: inherit !important;
         }
         
         .citation-highlight-word:hover {
           background-color: rgba(255, 193, 7, 0.8) !important;
         }
         
+        /* Remove all possible spacing modifications */
+        .citation-highlight,
+        .citation-highlight-word {
+          text-indent: 0 !important;
+          text-decoration: none !important;
+          box-sizing: content-box !important;
+        }
+        
         .citation-highlight *,
         .citation-highlight-word * {
           background-color: inherit !important;
           color: inherit !important;
+          word-spacing: inherit !important;
+          letter-spacing: inherit !important;
+          padding: 0 !important;
+          margin: 0 !important;
         }
         
         .text-content::selection {
@@ -588,17 +661,29 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata 
           -webkit-user-select: text !important;
           -moz-user-select: text !important;
           -ms-user-select: text !important;
+          word-spacing: inherit !important;
+          letter-spacing: inherit !important;
         }
         
+        /* Prevent any spacing issues */
         .text-content .citation-highlight,
         .text-content .citation-highlight-word {
-          word-spacing: normal !important;
-          letter-spacing: normal !important;
+          font-family: inherit !important;
+          font-size: inherit !important;
+          font-style: inherit !important;
+          text-decoration: none !important;
+        }
+        
+        /* Ensure proper spacing preservation */
+        .text-content br + .citation-highlight,
+        .text-content .citation-highlight + br,
+        .citation-highlight + .citation-highlight {
+          word-spacing: inherit !important;
         }
         
         @media (max-width: 768px) {
           .citation-highlight {
-            padding: 2px 3px !important;
+            padding: 1px 2px !important;
             font-size: 14px !important;
           }
         }
