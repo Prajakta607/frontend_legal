@@ -204,11 +204,12 @@ const RightPanel = forwardRef(function RightPanel({ pdfFile, citedPagesMetadata 
     }
   };
 
-  const escapeRegExp = (string) => {
-    return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  };
-// Replace your applyHighlights function with this improved version
+  // const escapeRegExp = (string) => {
+  //   return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  // };
+// Replace your applyHighlights function with this robust version
 const applyHighlights = () => {
+  
   if (!pageText) {
     setHighlightedText('');
     return;
@@ -227,127 +228,261 @@ const applyHighlights = () => {
   
   currentPageCitations.forEach((citation, index) => {
     const searchText = citation.quote || citation.content_preview;
-    if (!searchText || searchText.length < 3) return;
+    if (!searchText || searchText.length < 10) return; // Increased minimum length
 
     try {
-      // More aggressive text normalization
-      const normalizeText = (text) => {
+      console.log('=== Processing Citation ===');
+      console.log('Original citation:', searchText.substring(0, 100) + '...');
+
+      // Advanced text normalization
+      const advancedNormalize = (text) => {
         return text
-          .replace(/\s+/g, ' ')  // Multiple spaces to single space
-          .replace(/[\u2018\u2019]/g, "'")  // Smart quotes to regular quotes
-          .replace(/[\u201C\u201D]/g, '"')  // Smart double quotes
-          .replace(/[\u2013\u2014]/g, '-')  // En/em dashes to hyphens
-          .replace(/[\u00A0]/g, ' ')  // Non-breaking spaces
-          .replace(/[^\x20-\x7E]/g, c => {  // Replace other non-ASCII chars
-            // Keep common chars, replace others with space
-            const code = c.charCodeAt(0);
-            if (code < 127) return c;
-            return ' ';
-          })
-          .trim();
+          // Normalize whitespace
+          .replace(/\s+/g, ' ')
+          .replace(/\n+/g, ' ')
+          .replace(/\r+/g, ' ')
+          .replace(/\t+/g, ' ')
+          
+          // Normalize quotes and dashes
+          .replace(/[''`]/g, "'")
+          .replace(/[""]/g, '"')
+          .replace(/[–—−]/g, '-')
+          
+          // Normalize hyphens and punctuation spacing
+          .replace(/\s*-\s*/g, '- ')
+          .replace(/\s*—\s*/g, '- ')
+          
+          // Remove extra spaces around punctuation
+          .replace(/\s*([,.;:!?])\s*/g, '$1 ')
+          .replace(/\s*([()[\]{}])\s*/g, ' $1 ')
+          
+          // Normalize common PDF extraction issues
+          .replace(/(\w)-\s+(\w)/g, '$1$2') // Remove hyphenated line breaks
+          .replace(/([a-z])([A-Z])/g, '$1 $2') // Add space between camelCase
+          
+          .trim()
+          .replace(/\s+/g, ' '); // Final whitespace cleanup
       };
 
-      const cleanSearchText = normalizeText(searchText);
-      const cleanPageText = normalizeText(highlightedContent);
+      const normalizedCitation = advancedNormalize(searchText);
+      const normalizedPageText = advancedNormalize(pageText);
       
-      // Try exact match first with normalized text
-      const escapedText = escapeRegExp(cleanSearchText);
-      const exactRegex = new RegExp(escapedText, 'gi');
+      console.log('Normalized citation:', normalizedCitation.substring(0, 100) + '...');
+
+      // Method 1: Try exact match with normalized text
+      let matches = [];
       
-      // Search in normalized text but get positions for original text
-      const normalizedMatches = [...cleanPageText.matchAll(exactRegex)];
+      // Create a mapping between normalized and original text positions
+      const createPositionMap = (original, normalized) => {
+        const map = [];
+        let origIndex = 0;
+        let normIndex = 0;
+        
+        while (origIndex < original.length && normIndex < normalized.length) {
+          if (original[origIndex].toLowerCase() === normalized[normIndex].toLowerCase()) {
+            map[normIndex] = origIndex;
+            origIndex++;
+            normIndex++;
+          } else {
+            // Skip whitespace or special chars in original
+            origIndex++;
+          }
+        }
+        return map;
+      };
+
+      const positionMap = createPositionMap(pageText, normalizedPageText);
+      
+      // Try exact normalized match
+      const escapedNormalized = escapeRegExp(normalizedCitation);
+      const normalizedRegex = new RegExp(escapedNormalized, 'gi');
+      const normalizedMatches = [...normalizedPageText.matchAll(normalizedRegex)];
       
       if (normalizedMatches.length > 0) {
-        // Find corresponding positions in original text
-        const matches = normalizedMatches.map(match => {
-          const normalizedStart = match.index;
-          const normalizedEnd = normalizedStart + match[0].length;
+        console.log('✅ Found exact normalized match');
+        
+        // Map back to original positions
+        matches = normalizedMatches.map(match => {
+          const normStart = match.index;
+          const normEnd = normStart + match[0].length;
           
-          // Map back to original text position (approximate)
-          // This is complex, so let's use a simpler approach
-          const beforeNormalized = cleanPageText.substring(0, normalizedStart);
-          const matchNormalized = cleanPageText.substring(normalizedStart, normalizedEnd);
+          // Find original positions
+          const origStart = positionMap[normStart] || 0;
+          let origEnd = origStart;
           
-          // Find this text in original
-          const beforeOriginal = highlightedContent.substring(0, beforeNormalized.length + 50);
-          const searchInOriginal = new RegExp(escapeRegExp(matchNormalized).replace(/\s+/g, '\\s+'), 'gi');
-          const originalMatch = beforeOriginal.match(searchInOriginal);
-          
-          if (originalMatch) {
-            const originalStart = beforeOriginal.lastIndexOf(originalMatch[originalMatch.length - 1]);
-            const originalText = highlightedContent.substring(originalStart, originalStart + matchNormalized.length + 20);
-            const finalMatch = originalText.match(new RegExp(escapeRegExp(matchNormalized).replace(/\s+/g, '\\s+'), 'i'));
-            
-            if (finalMatch) {
-              return {
-                index: originalStart + finalMatch.index,
-                0: finalMatch[0]
-              };
+          // Find the end position in original text
+          for (let i = normStart; i < normEnd && i < positionMap.length; i++) {
+            if (positionMap[i] !== undefined) {
+              origEnd = positionMap[i] + 1;
             }
           }
-          return null;
-        }).filter(Boolean);
-
-        if (matches.length > 0) {
-          // Apply exact highlighting
-          matches.reverse().forEach((match, matchIndex) => {
-            const start = match.index;
-            const end = start + match[0].length;
-            const originalText = match[0];
-            const highlightId = `highlight-${index}-${matchIndex}`;
-            
-            highlightedContent = 
-              highlightedContent.slice(0, start) +
-              `<mark class="citation-highlight" data-citation-id="${index}" id="${highlightId}">${originalText}</mark>` +
-              highlightedContent.slice(end);
-          });
-          return; // Success, skip fallback methods
-        }
+          
+          return {
+            index: origStart,
+            0: pageText.substring(origStart, origEnd),
+            length: origEnd - origStart
+          };
+        });
       }
 
-      // Fallback: Simple case-insensitive search with flexible spacing
-      const words = cleanSearchText.split(/\s+/).filter(word => word.length > 2);
-      
-      if (words.length > 1) {
-        // Create pattern that allows flexible spacing
-        const flexiblePattern = words.map(word => escapeRegExp(word)).join('\\s+');
-        const flexibleRegex = new RegExp(flexiblePattern, 'gi');
-        const flexibleMatches = [...highlightedContent.matchAll(flexibleRegex)];
+      // Method 2: Fuzzy matching with word sequence
+      if (matches.length === 0) {
+        console.log('Trying fuzzy word sequence matching...');
         
-        if (flexibleMatches.length > 0) {
-          // Apply flexible highlighting (same as exact)
-          flexibleMatches.reverse().forEach((match, matchIndex) => {
-            const start = match.index;
-            const end = start + match[0].length;
-            const originalText = match[0];
-            const highlightId = `highlight-${index}-${matchIndex}`;
+        const citationWords = normalizedCitation.split(/\s+/).filter(w => w.length > 2);
+        const pageWords = normalizedPageText.split(/\s+/);
+        
+        // Find word sequences that match with some tolerance
+        for (let i = 0; i <= pageWords.length - citationWords.length; i++) {
+          const pageSequence = pageWords.slice(i, i + citationWords.length);
+          
+          // Check if sequences match with some word flexibility
+          let matchScore = 0;
+          for (let j = 0; j < citationWords.length; j++) {
+            if (pageSequence[j] && citationWords[j]) {
+              const citationWord = citationWords[j].toLowerCase().replace(/[^\w]/g, '');
+              const pageWord = pageSequence[j].toLowerCase().replace(/[^\w]/g, '');
+              
+              if (citationWord === pageWord) {
+                matchScore++;
+              } else if (pageWord.includes(citationWord) || citationWord.includes(pageWord)) {
+                matchScore += 0.7; // Partial match
+              }
+            }
+          }
+          
+          // If we have a good match (80% or better)
+          if (matchScore / citationWords.length >= 0.8) {
+            console.log(`✅ Found fuzzy sequence match with score: ${matchScore / citationWords.length}`);
             
-            highlightedContent = 
-              highlightedContent.slice(0, start) +
-              `<mark class="citation-highlight" data-citation-id="${index}" id="${highlightId}">${originalText}</mark>` +
-              highlightedContent.slice(end);
-          });
-          return; // Success, skip word-by-word
+            // Find this sequence in the original text
+            const sequenceStart = pageWords.slice(0, i).join(' ').length;
+            const sequenceEnd = sequenceStart + pageSequence.join(' ').length;
+            
+            // Adjust for original text positions
+            const beforeText = normalizedPageText.substring(0, sequenceStart).trim();
+            const matchText = normalizedPageText.substring(sequenceStart, sequenceEnd).trim();
+            
+            // Find approximate position in original text
+            const originalStart = pageText.toLowerCase().indexOf(beforeText.toLowerCase()) + beforeText.length;
+            const searchArea = pageText.substring(Math.max(0, originalStart - 50), originalStart + matchText.length + 100);
+            
+            // Look for the best match in this area
+            const flexibleRegex = new RegExp(
+              citationWords.slice(0, Math.min(5, citationWords.length))
+                .map(word => escapeRegExp(word.replace(/[^\w]/g, '')))
+                .join('\\W+\\w*\\W*'), 
+              'gi'
+            );
+            
+            const areaMatch = searchArea.match(flexibleRegex);
+            if (areaMatch) {
+              const areaStart = searchArea.indexOf(areaMatch[0]);
+              const finalStart = Math.max(0, originalStart - 50) + areaStart;
+              const finalEnd = Math.min(pageText.length, finalStart + areaMatch[0].length);
+              
+              matches = [{
+                index: finalStart,
+                0: pageText.substring(finalStart, finalEnd),
+                length: finalEnd - finalStart
+              }];
+            }
+            break;
+          }
         }
       }
 
-      // Final fallback: word-by-word (only if above methods fail)
+      // Method 3: Sentence-based matching (for longer citations)
+      if (matches.length === 0 && normalizedCitation.length > 100) {
+        console.log('Trying sentence-based matching...');
+        
+        const citationSentences = normalizedCitation.split(/[.!?]+/).filter(s => s.trim().length > 20);
+        
+        for (const sentence of citationSentences.slice(0, 2)) { // Try first 2 sentences
+          const sentenceWords = sentence.trim().split(/\s+/).filter(w => w.length > 3).slice(0, 8);
+          if (sentenceWords.length > 4) {
+            const sentencePattern = sentenceWords
+              .map(word => escapeRegExp(word.replace(/[^\w]/g, '')))
+              .join('\\W+\\w*\\W*');
+            
+            const sentenceRegex = new RegExp(sentencePattern, 'gi');
+            const sentenceMatches = [...pageText.matchAll(sentenceRegex)];
+            
+            if (sentenceMatches.length > 0) {
+              console.log('✅ Found sentence-based match');
+              matches = sentenceMatches.map(match => ({
+                index: match.index,
+                0: match[0],
+                length: match[0].length
+              }));
+              break;
+            }
+          }
+        }
+      }
+
+      // Apply highlighting if we found matches
+      if (matches.length > 0) {
+        console.log(`Applying ${matches.length} highlights`);
+        
+        matches.reverse().forEach((match, matchIndex) => {
+          const start = match.index;
+          const end = start + match[0].length;
+          const originalText = match[0];
+          const highlightId = `highlight-${index}-${matchIndex}`;
+          
+          highlightedContent = 
+            highlightedContent.slice(0, start) +
+            `<mark class="citation-highlight" data-citation-id="${index}" id="${highlightId}">${originalText}</mark>` +
+            highlightedContent.slice(end);
+        });
+      } else {
+        console.log('❌ All methods failed, falling back to word highlighting');
+        
+        // Enhanced word-by-word as final fallback
+        const words = normalizedCitation.split(/\s+/)
+          .filter(word => word.length > 3)
+          .slice(0, 15); // Limit to first 15 words to avoid over-highlighting
+        
+        words.forEach(word => {
+          const cleanWord = word.replace(/[^\w]/g, '');
+          if (cleanWord.length > 3) {
+            const wordRegex = new RegExp(`\\b(${escapeRegExp(cleanWord)})\\b`, 'gi');
+            highlightedContent = highlightedContent.replace(wordRegex, 
+              `<mark class="citation-highlight-word" data-citation-id="${index}">$1</mark>`
+            );
+          }
+        });
+      }
+
+    } catch (error) {
+      console.error('Error in highlighting:', error);
+      console.log('Falling back to basic word highlighting');
+      
+      // Safe fallback
+      const words = searchText.split(/\s+/).filter(w => w.length > 3).slice(0, 10);
       words.forEach(word => {
-        const cleanWord = word.replace(/[,.\-&()!?;:]/g, '');
-        if (cleanWord.length > 2) {
-          const wordRegex = new RegExp(`\\b(${escapeRegExp(cleanWord)})\\b`, 'gi');
-          highlightedContent = highlightedContent.replace(wordRegex, 
-            `<mark class="citation-highlight-word" data-citation-id="${index}">$1</mark>`
-          );
+        const cleanWord = word.replace(/[^\w]/g, '');
+        if (cleanWord.length > 3) {
+          try {
+            const wordRegex = new RegExp(`\\b(${escapeRegExp(cleanWord)})\\b`, 'gi');
+            highlightedContent = highlightedContent.replace(wordRegex, 
+              `<mark class="citation-highlight-word" data-citation-id="${index}">$1</mark>`
+            );
+          } catch (regexError) {
+            console.warn('Word regex failed:', regexError);
+          }
         }
       });
-
-    } catch (regexError) {
-      console.warn("Regex error in highlighting:", regexError);
     }
   });
 
   setHighlightedText(highlightedContent);
+};
+
+// Helper function to escape regex special characters (keep your existing one)
+const escapeRegExp = (string) => {
+  return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 };
   const copySelectedText = async () => {
     try {
